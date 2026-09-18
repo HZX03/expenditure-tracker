@@ -317,7 +317,7 @@ function waitForGoogleIdentity(cb, attempts){
 }
 function initGoogleAuth(){
   tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CONFIG.GOOGLE_CLIENT_ID,
+    client_id: 572760733608-2doa5cv817dcib9m928it6r9sq2blil4.apps.googleusercontent.com,
     scope: DRIVE_SCOPE,
     hint: CONFIG.GOOGLE_ACCOUNT_HINT || undefined,
     callback: (resp) => { if (resp && resp.access_token){ driveAccessToken = resp.access_token; setAuthStatus(''); onSignedIn(); } else handleAuthAttemptFailed(); },
