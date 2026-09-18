@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Expenditure Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root {
+  --paper: #EFEBE1; --paper-raised: #F8F5EC; --ink: #23271F; --ink-soft: #5B5A4E;
+  --rule: #D8D2C2; --teal: #1F6F5C; --teal-soft: #E4EEE9; --rust: #B54834;
+  --gold: #A9791F; --gold-soft: #F3E8CE;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Inter', sans-serif; background: var(--paper); color: var(--ink); min-height: 100vh; padding-bottom: 40px; }
+.mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-soft); font-size: 13px; }
+.spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+button { font-family: inherit; cursor: pointer; }
+select, input, textarea {
+  font-family: inherit; font-size: 13.5px; padding: 8px 10px; border: 1px solid var(--rule);
+  border-radius: 6px; background: #fff; color: var(--ink); width: 100%;
+}
+select:focus, input:focus, textarea:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
+textarea { resize: vertical; }
+a { color: var(--teal); }
+
+/* Auth gate */
+#authGate {
+  position: fixed; inset: 0; background: var(--paper); display: flex; align-items: center;
+  justify-content: center; flex-direction: column; gap: 14px; z-index: 50; text-align: center; padding: 20px;
+}
+#authGate .brand-mark { font-family: Georgia, serif; font-size: 34px; color: var(--rust); border: 2px solid var(--rust); border-radius: 4px; padding: 2px 12px; }
+.auth-status { font-size: 13px; color: var(--ink-soft); min-height: 18px; }
+.auth-status.error { color: var(--rust); }
+#signInBtn { display: none; }
+
+.app-header { padding: 22px 28px 0; border-bottom: 1px solid var(--rule); background: linear-gradient(180deg, var(--paper-raised), var(--paper)); }
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+.brand-left { display: flex; align-items: baseline; gap: 10px; }
+.brand-mark { font-family: Georgia, serif; font-size: 26px; color: var(--rust); border: 1.5px solid var(--rust); border-radius: 3px; padding: 0 7px; line-height: 1.5; }
+.brand-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 21px; }
+.brand-sub { font-size: 12px; color: var(--ink-soft); }
+.save-badge { font-size: 11px; color: var(--ink-soft); display: flex; align-items: center; gap: 5px; }
+.tabs { display: flex; gap: 4px; }
+.tab-btn { display: flex; align-items: center; gap: 7px; padding: 9px 16px; font-size: 13.5px; font-weight: 600; background: none; border: none; border-bottom: 2px solid transparent; color: var(--ink-soft); }
+.tab-btn:hover { color: var(--ink); }
+.tab-btn.active { color: var(--ink); border-bottom-color: var(--rust); }
+.app-main { max-width: 880px; margin: 0 auto; padding: 24px 24px 0; }
+.view { display: none; }
+.view.active { display: block; }
+
+.summary-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.summary-pill { background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 14px; display: flex; align-items: baseline; gap: 8px; }
+.summary-cur { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink-soft); }
+.summary-val { font-size: 16px; font-weight: 600; }
+
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+.toolbar-left { flex: 1; min-width: 160px; }
+.toolbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.btn-primary { display: inline-flex; align-items: center; gap: 6px; background: var(--ink); color: var(--paper-raised); border: none; padding: 9px 16px; border-radius: 7px; font-weight: 600; font-size: 13.5px; }
+.btn-primary:disabled { opacity: .5; cursor: default; }
+.btn-ghost { background: none; border: 1px solid var(--rule); color: var(--ink-soft); padding: 9px 16px; border-radius: 7px; font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.btn-ai { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--teal-soft); color: var(--teal); border: 1px solid var(--teal); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.btn-ai:disabled { opacity: .5; cursor: default; }
+.btn-sm { padding: 6px 11px; font-size: 12.5px; }
+
+.panel-card { background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-span { grid-column: 1 / -1; }
+.field-label { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; color: var(--ink-soft); text-transform: uppercase; }
+.amount-row { display: flex; gap: 6px; }
+.amount-row select { flex: 0 0 78px; }
+.category-row { display: flex; gap: 6px; align-items: flex-start; }
+.ai-note { font-size: 12px; color: var(--teal); margin: 2px 0 0; }
+.ai-note-error { color: var(--rust); }
+.form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+.chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 20px; background: var(--gold-soft); color: var(--gold); border: 1px solid var(--gold); gap: 4px; }
+.chip-ai { background: var(--teal-soft); color: var(--teal); border-color: var(--teal); }
+.chip-muted { background: #EFEAF0; color: #6B5E74; border-color: #C9BCD1; }
+.chip-ok { background: var(--teal-soft); color: var(--teal); border: 1px solid var(--teal); }
+.chip-btn { background: none; border: none; padding: 0; }
+
+.import-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; border: 1.5px dashed var(--rule); border-radius: 8px; padding: 26px 16px; color: var(--ink-soft); background: var(--paper); }
+.import-choose { position: relative; cursor: pointer; }
+.import-review-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; margin-bottom: 12px; }
+.import-rows { display: flex; flex-direction: column; gap: 8px; max-height: 440px; overflow-y: auto; }
+.import-row { display: grid; grid-template-columns: 18px 128px 1fr 150px 150px 44px auto; gap: 8px; align-items: center; }
+.import-amount { min-width: 0; }
+.import-amount select { flex: 0 0 66px; }
+.import-conf { justify-self: center; }
+
+.tx-list { border-top: 1px solid var(--rule); }
+.tx-group-date { font-size: 11px; color: var(--ink-soft); padding: 14px 0 4px; letter-spacing: .03em; }
+.tx-row { display: grid; grid-template-columns: 92px 1fr auto auto; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--rule); position: relative; }
+.tx-date { font-size: 12px; color: var(--ink-soft); }
+.tx-desc { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.tx-tags { display: flex; gap: 6px; align-items: center; }
+.tx-amount { font-size: 14.5px; font-weight: 600; }
+.tx-amount.neg { color: var(--rust); }
+.tx-actions { display: flex; gap: 2px; }
+.tx-comment { grid-column: 1 / -1; font-size: 13px; color: var(--ink-soft); background: #fff; border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; margin-top: 4px; }
+.icon-btn { background: none; border: none; padding: 6px; border-radius: 5px; color: var(--ink-soft); }
+.icon-btn:hover { background: var(--paper); color: var(--ink); }
+.icon-btn-danger:hover { background: #FBE7E2; color: var(--rust); }
+.icon { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+
+.empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 48px 20px; color: var(--ink-soft); }
+.empty-state p { max-width: 340px; font-size: 13.5px; margin: 0; }
+
+.loan-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.loan-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 5px; }
+.loan-badge-lent { background: var(--teal-soft); color: var(--teal); }
+.loan-badge-borrowed { background: #FBE7E2; color: var(--rust); }
+.loan-body { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 8px; }
+.loan-body .muted { display: block; font-size: 11px; margin-bottom: 2px; }
+.loan-body .ok { color: var(--teal); }
+.loan-notes { font-size: 13px; color: var(--ink-soft); margin: 4px 0 10px; }
+.payment-list { border-top: 1px dashed var(--rule); margin-top: 8px; padding-top: 8px; }
+.payment-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 2px 0; color: var(--ink-soft); }
+.payment-form { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.payment-form input { width: auto; flex: 1; }
+
+.fx-row { display: grid; grid-template-columns: 90px 1fr auto auto; align-items: center; gap: 14px; position: relative; }
+.fx-conv { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.fx-rate { font-size: 12.5px; color: var(--ink-soft); }
+.fx-comment { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
+
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .tx-row, .fx-row, .import-row { grid-template-columns: 1fr; }
+  .app-header { padding: 16px 16px 0; } .app-main { padding: 18px 14px 0; }
+}
+</style>
+</head>
+<body>
+
+<div id="authGate">
+  <div class="brand-mark">§</div>
+  <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:20px;">Ledger</div>
+  <p id="authGateText" class="muted" style="max-width:320px;">Signing you in…</p>
+  <div id="authStatus" class="auth-status"></div>
+  <button id="signInBtn" class="btn-primary" onclick="signIn()">Sign in with Google</button>
+</div>
+
+<header class="app-header">
+  <div class="brand">
+    <div class="brand-left">
+      <span class="brand-mark">§</span>
+      <div>
+        <div class="brand-title">Ledger</div>
+        <div class="brand-sub">expenditure, loans &amp; exchange — kept apart, kept honest</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span id="saveBadge" class="save-badge"></span>
+      <button class="btn-ghost btn-sm" onclick="signOut()">Sign out</button>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" id="tabBtn-transactions" onclick="setTab('transactions')">Transactions</button>
+    <button class="tab-btn" id="tabBtn-loans" onclick="setTab('loans')">Loans</button>
+    <button class="tab-btn" id="tabBtn-fx" onclick="setTab('fx')">Currency Exchange</button>
+  </nav>
+</header>
+
+<main class="app-main">
+
+  <!-- ============================= TRANSACTIONS ============================= -->
+  <div class="view active" id="view-transactions">
+    <div class="summary-strip" id="tx-summary"></div>
+
+    <div class="toolbar">
+      <div class="toolbar-left"><select id="tx-filter-cat" onchange="renderTxList()"><option value="">All categories</option></select></div>
+      <div class="toolbar-right">
+        <button class="btn-ghost" onclick="openImportPanel()">⬆ Import statement</button>
+        <button class="btn-primary" onclick="openTxForm()">+ Add transaction</button>
+      </div>
+    </div>
+
+    <!-- Add / edit transaction form (static — never re-rendered while typing) -->
+    <form class="panel-card form-grid" id="tx-form" style="display:none" onsubmit="submitTxForm(event)">
+      <input type="hidden" id="tx-id">
+      <div class="field"><span class="field-label">Date</span><input type="date" id="tx-date" required></div>
+      <div class="field">
+        <span class="field-label">Amount</span>
+        <div class="amount-row">
+          <select id="tx-currency"></select>
+          <input type="number" step="0.01" min="0" placeholder="0.00" id="tx-amount" required>
+        </div>
+      </div>
+      <div class="field field-span"><span class="field-label">Item</span>
+        <input type="text" placeholder="e.g. Grab ride to Orchard Road" id="tx-item" oninput="onTxItemChanged()" required>
+      </div>
+      <div class="field field-span">
+        <span class="field-label">Category</span>
+        <div class="category-row">
+          <div id="tx-cat-picker"></div>
+          <button type="button" class="btn-ai" id="tx-suggest-btn" onclick="suggestTxCategory()">✨ Suggest</button>
+        </div>
+        <p class="ai-note" id="tx-ai-note" style="display:none"></p>
+      </div>
+      <div class="field"><span class="field-label">Secondary category (optional)</span>
+        <input type="text" placeholder="e.g. Spain Holiday" id="tx-secondary"></div>
+      <div class="field field-span"><span class="field-label">Comment</span>
+        <textarea rows="2" placeholder="Any notes on this transaction…" id="tx-comment"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn-ghost" onclick="closeTxForm()">Cancel</button>
+        <button type="submit" class="btn-primary" id="tx-submit-btn">Add transaction</button>
+      </div>
+    </form>
+
+    <!-- Bank statement import -->
+    <div class="panel-card" id="import-panel" style="display:none"></div>
+
+    <div class="tx-list" id="tx-list"></div>
+  </div>
+
+  <!-- ============================= LOANS ============================= -->
+  <div class="view" id="view-loans">
+    <div class="toolbar">
+      <div class="toolbar-left"><span class="muted">Tracked separately from everyday spending.</span></div>
+      <button class="btn-primary" onclick="openLoanForm()">+ Add loan</button>
+    </div>
+
+    <form class="panel-card form-grid" id="loan-form" style="display:none" onsubmit="submitLoanForm(event)">
+      <div class="field"><span class="field-label">Direction</span>
+        <select id="loan-direction"><option value="lent">I lent money</option><option value="borrowed">I borrowed money</option></select></div>
+      <div class="field"><span class="field-label">Counterparty</span><input type="text" placeholder="Name" id="loan-counterparty" required></div>
+      <div class="field"><span class="field-label">Principal</span>
+        <div class="amount-row"><select id="loan-currency"></select><input type="number" step="0.01" min="0" id="loan-principal" required></div></div>
+      <div class="field"><span class="field-label">Date issued</span><input type="date" id="loan-date" required></div>
+      <div class="field"><span class="field-label">Interest rate % (optional)</span><input type="number" step="0.01" min="0" id="loan-rate"></div>
+      <div class="field"><span class="field-label">Due date (optional)</span><input type="date" id="loan-duedate"></div>
+      <div class="field field-span"><span class="field-label">Notes</span><textarea rows="2" id="loan-notes"></textarea></div>
+      <div class="form-actions"><button type="button" class="btn-ghost" onclick="closeLoanForm()">Cancel</button><button type="submit" class="btn-primary">Add loan</button></div>
+    </form>
+
+    <div id="loan-list"></div>
+  </div>
+
+  <!-- ============================= FX ============================= -->
+  <div class="view" id="view-fx">
+    <div class="toolbar">
+      <div class="toolbar-left"><span class="muted">Track conversions at the rate you actually got.</span></div>
+      <button class="btn-primary" onclick="openFxForm()">+ Log exchange</button>
+    </div>
+
+    <form class="panel-card form-grid" id="fx-form" style="display:none" onsubmit="submitFxForm(event)">
+      <div class="field"><span class="field-label">Date</span><input type="date" id="fx-date" required></div>
+      <div class="field"><span class="field-label">Effective rate</span><div class="mono" id="fx-rate-display" style="padding:8px 0;">—</div></div>
+      <div class="field"><span class="field-label">You gave</span>
+        <div class="amount-row"><select id="fx-from-cur" onchange="updateFxRateDisplay()"></select><input type="number" step="0.01" min="0" id="fx-from-amt" oninput="updateFxRateDisplay()" required></div></div>
+      <div class="field"><span class="field-label">You received</span>
+        <div class="amount-row"><select id="fx-to-cur" onchange="updateFxRateDisplay()"></select><input type="number" step="0.01" min="0" id="fx-to-amt" oninput="updateFxRateDisplay()" required></div></div>
+      <div class="field field-span"><span class="field-label">Comment</span><textarea rows="2" placeholder="e.g. Airport counter, poor rate but urgent" id="fx-comment"></textarea></div>
+      <div class="form-actions"><button type="button" class="btn-ghost" onclick="closeFxForm()">Cancel</button><button type="submit" class="btn-primary">Log exchange</button></div>
+    </form>
+
+    <div id="fx-list"></div>
+  </div>
+
+</main>
+
+<script>
+/* ======================================================================
+   CONFIG — edit these two after you deploy
+   ====================================================================== */
+const CONFIG = {
+  // Your Cloudflare Worker URL from `wrangler deploy` (no trailing slash).
+  API_BASE: 'https://expenditure-tracker-api.YOUR-SUBDOMAIN.workers.dev',
+  // Reused from your other app: this works as-is if this site shares the
+  // same origin (e.g. same github.io domain) as that app's authorized
+  // JavaScript origins. Otherwise create your own OAuth client ID in
+  // Google Cloud Console and swap it in here.
+  GOOGLE_CLIENT_ID: '210912226684-l0btp1egeoakjn4ujm7flkq7nj5jsak2.apps.googleusercontent.com',
+  GOOGLE_ACCOUNT_HINT: '', // optional: your email, skips the account picker
+};
+
+const DEFAULT_CATEGORIES = ["Food & Dining","Groceries","Transport","Housing & Utilities","Shopping","Health","Entertainment","Travel","Education","Subscriptions","Fees & Charges","Other"];
+const CURRENCIES = ["SGD","USD","EUR","GBP","JPY","MYR","AUD","CNY","IDR","THB"];
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_FILE_NAME = 'expenditure-tracker-data.json';
+const DRIVE_FOLDER_NAME = 'Expenditure Tracker';
+
+/* ======================================================================
+   STATE
+   ====================================================================== */
+let state = { transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [] };
+let tab = 'transactions';
+let txAiMeta = null;      // { confidence, reasoning } for the form currently open
+let txAiSuggested = false;
+let importRows = null;    // draft rows from a parsed statement, or null
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function fmtMoney(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ======================================================================
+   GOOGLE DRIVE AUTH + PERSISTENCE  (same pattern as the task tracker app)
+   ====================================================================== */
+let driveFolderId = null, tokenClient = null, driveAccessToken = null, driveFileId = null;
+let appStarted = false, silentAttemptDone = false, saveTimer = null;
+
+function waitForGoogleIdentity(cb, attempts){
+  attempts = attempts || 0;
+  if (window.google && google.accounts && google.accounts.oauth2) cb();
+  else if (attempts < 50) setTimeout(() => waitForGoogleIdentity(cb, attempts+1), 100);
+  else { setAuthStatus('Could not load Google Sign-In. Check your connection and reload.', true); revealSignInButton(); }
+}
+function initGoogleAuth(){
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CONFIG.GOOGLE_CLIENT_ID,
+    scope: DRIVE_SCOPE,
+    hint: CONFIG.GOOGLE_ACCOUNT_HINT || undefined,
+    callback: (resp) => { if (resp && resp.access_token){ driveAccessToken = resp.access_token; setAuthStatus(''); onSignedIn(); } else handleAuthAttemptFailed(); },
+    error_callback: () => handleAuthAttemptFailed(),
+  });
+  setAuthStatus('Signing you in…');
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+function handleAuthAttemptFailed(){
+  if (!silentAttemptDone){ silentAttemptDone = true; setAuthStatus(''); revealSignInButton(); }
+  else setAuthStatus('Sign-in failed or was cancelled. Please try again.', true);
+}
+function revealSignInButton(){
+  document.getElementById('signInBtn').style.display = 'inline-block';
+  document.getElementById('authGateText').textContent = 'Sign in with Google to load and sync your ledger via Google Drive.';
+}
+function setAuthStatus(msg, isError){
+  const el = document.getElementById('authStatus');
+  el.textContent = msg || ''; el.className = 'auth-status' + (isError ? ' error' : '');
+}
+function signIn(){
+  if (!tokenClient){ setAuthStatus('Still loading Google Sign-In — try again in a moment.', true); return; }
+  silentAttemptDone = true; setAuthStatus('Opening Google sign-in…'); tokenClient.requestAccessToken();
+}
+function signOut(){
+  if (driveAccessToken && window.google) { try { google.accounts.oauth2.revoke(driveAccessToken, () => {}); } catch(e){} }
+  driveAccessToken = null; driveFileId = null; driveFolderId = null; appStarted = false; silentAttemptDone = true;
+  document.getElementById('authGate').style.display = 'flex'; revealSignInButton(); setAuthStatus('');
+}
+function onSignedIn(){
+  if (appStarted) return; appStarted = true;
+  document.getElementById('authGate').style.display = 'none';
+  loadState();
+}
+async function driveFetch(url, options){
+  options = options || {};
+  options.headers = Object.assign({}, options.headers, { Authorization: `Bearer ${driveAccessToken}` });
+  let res = await fetch(url, options);
+  if (res.status === 401){ await refreshDriveToken(); options.headers.Authorization = `Bearer ${driveAccessToken}`; res = await fetch(url, options); }
+  return res;
+}
+function refreshDriveToken(){
+  return new Promise((resolve, reject) => {
+    if (!tokenClient){ reject(new Error('No token client')); return; }
+    const prev = tokenClient.callback;
+    tokenClient.callback = (resp) => { tokenClient.callback = prev; if (resp && resp.access_token){ driveAccessToken = resp.access_token; resolve(); } else reject(new Error('Silent refresh failed')); };
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+async function driveFindOrCreateFolder(){
+  const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`);
+  if (!res.ok) throw new Error('Drive folder search failed: ' + res.status);
+  const data = await res.json();
+  if (data.files && data.files[0]) return data.files[0].id;
+  const createRes = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }) });
+  if (!createRes.ok) throw new Error('Drive folder create failed: ' + createRes.status);
+  return (await createRes.json()).id;
+}
+async function driveFindFile(){
+  if (!driveFolderId) driveFolderId = await driveFindOrCreateFolder();
+  const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false and '${driveFolderId}' in parents`);
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`);
+  if (!res.ok) throw new Error('Drive search failed: ' + res.status);
+  const data = await res.json();
+  return (data.files && data.files[0]) ? data.files[0].id : null;
+}
+async function driveGetFileContent(fileId){
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  if (!res.ok) throw new Error('Drive read failed: ' + res.status);
+  return await res.text();
+}
+async function driveCreateFile(content){
+  if (!driveFolderId) driveFolderId = await driveFindOrCreateFolder();
+  const metadata = { name: DRIVE_FILE_NAME, mimeType: 'application/json', parents: [driveFolderId] };
+  const boundary = 'expenditure_tracker_boundary_9d2e';
+  const delimiter = '\r\n--' + boundary + '\r\n', closeDelim = '\r\n--' + boundary + '--';
+  const body = delimiter + 'Content-Type: application/json\r\n\r\n' + JSON.stringify(metadata) + delimiter + 'Content-Type: application/json\r\n\r\n' + content + closeDelim;
+  const res = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method:'POST', headers:{'Content-Type':`multipart/related; boundary="${boundary}"`}, body });
+  if (!res.ok) throw new Error('Drive create failed: ' + res.status);
+  return (await res.json()).id;
+}
+async function driveUpdateFile(fileId, content){
+  const res = await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: content });
+  if (!res.ok) throw new Error('Drive update failed: ' + res.status);
+  return true;
+}
+async function loadState(){
+  let loaded = false;
+  for (let attempt = 1; attempt <= 3 && !loaded; attempt++){
+    try {
+      driveFileId = await driveFindFile();
+      if (driveFileId){
+        const text = await driveGetFileContent(driveFileId);
+        if (text){ const parsed = JSON.parse(text); state = Object.assign({ transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [] }, parsed); }
+      }
+      loaded = true;
+    } catch(e){ console.log(`Drive load attempt ${attempt}/3 failed:`, e); if (attempt < 3) await new Promise(r => setTimeout(r, 400*attempt)); }
+  }
+  populateStaticSelects();
+  renderAll();
+  setSaveBadge('idle');
+}
+function saveState(){
+  setSaveBadge('pending');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSaveState, 800);
+}
+async function doSaveState(){
+  setSaveBadge('saving');
+  try {
+    const content = JSON.stringify(state);
+    if (driveFileId) await driveUpdateFile(driveFileId, content);
+    else driveFileId = await driveCreateFile(content);
+    setSaveBadge('idle');
+  } catch(e){ console.log('Save failed:', e); setSaveBadge('error'); }
+}
+function setSaveBadge(mode){
+  const el = document.getElementById('saveBadge');
+  if (mode === 'pending' || mode === 'saving') el.textContent = 'Saving…';
+  else if (mode === 'error') el.textContent = '⚠ Save failed — will retry';
+  else el.textContent = '✓ Synced to Drive';
+}
+
+/* ======================================================================
+   AI — classify one item, or parse a whole statement, via the Worker
+   ====================================================================== */
+function recentHistory(){
+  // The "training data": every description -> category the user has ever
+  // saved, most recent first. No separate correction log needed — the
+  // ledger itself is the training set, and it grows on every save.
+  return state.transactions.slice(0, 200).map(t => ({ description: t.description, category: t.category }));
+}
+async function callWorker(path, body){
+  const res = await fetch(CONFIG.API_BASE + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('Worker error ' + res.status);
+  return res.json();
+}
+async function classifyItem(description, amount, currency){
+  return callWorker('/classify', { description, amount, currency, categories: state.categories, history: recentHistory() });
+}
+async function parseStatementPdf(base64){
+  const result = await callWorker('/parse-statement', { pdfBase64: base64, categories: state.categories, history: recentHistory() });
+  return (result.transactions || []).map(r => ({
+    rowId: uid(), date: r.date || todayISO(), description: r.item || '', amount: Number(r.amount)||0,
+    currency: CURRENCIES.includes(r.currency) ? r.currency : 'SGD',
+    category: state.categories.includes(r.category) ? r.category : 'Other',
+    confidence: typeof r.confidence === 'number' ? r.confidence : null, selected: true,
+  }));
+}
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ======================================================================
+   TABS
+   ====================================================================== */
+function setTab(t){
+  tab = t;
+  ['transactions','loans','fx'].forEach(id => {
+    document.getElementById('view-' + id).classList.toggle('active', id === t);
+    document.getElementById('tabBtn-' + id).classList.toggle('active', id === t);
+  });
+}
+
+/* ======================================================================
+   STATIC SELECT POPULATION (run once after load)
+   ====================================================================== */
+function populateStaticSelects(){
+  const currencySelects = ['tx-currency','loan-currency','fx-from-cur','fx-to-cur'];
+  currencySelects.forEach(id => {
+    const el = document.getElementById(id);
+    el.innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  });
+  document.getElementById('fx-to-cur').value = CURRENCIES[1] || CURRENCIES[0];
+  const filterCat = document.getElementById('tx-filter-cat');
+  filterCat.innerHTML = '<option value="">All categories</option>' + state.categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+}
+function categoryOptions(selected){
+  return '<option value="">Select…</option>' + state.categories.map(c => `<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('');
+}
+
+/* ======================================================================
+   TRANSACTIONS
+   ====================================================================== */
+function renderAll(){ renderTxSummary(); renderTxList(); renderLoanList(); renderFxList(); }
+
+function openTxForm(editTx){
+  document.getElementById('import-panel').style.display = 'none';
+  const f = document.getElementById('tx-form');
+  f.style.display = 'grid';
+  document.getElementById('tx-id').value = editTx ? editTx.id : '';
+  document.getElementById('tx-date').value = editTx ? editTx.date : todayISO();
+  document.getElementById('tx-currency').value = editTx ? editTx.currency : 'SGD';
+  document.getElementById('tx-amount').value = editTx ? editTx.amount : '';
+  document.getElementById('tx-item').value = editTx ? editTx.description : '';
+  document.getElementById('tx-secondary').value = editTx ? (editTx.secondary || '') : '';
+  document.getElementById('tx-comment').value = editTx ? (editTx.comment || '') : '';
+  document.getElementById('tx-submit-btn').textContent = editTx ? 'Save changes' : 'Add transaction';
+  txAiMeta = null; txAiSuggested = editTx ? !!editTx.aiSuggested : false;
+  renderTxCatPicker(editTx ? editTx.category : '');
+  document.getElementById('tx-ai-note').style.display = 'none';
+  f.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function closeTxForm(){ document.getElementById('tx-form').style.display = 'none'; }
+
+function renderTxCatPicker(selected){
+  const el = document.getElementById('tx-cat-picker');
+  if (!selected){
+    el.innerHTML = `<button type="button" class="chip-btn" onclick="editTxCatPicker()"><span class="chip chip-muted">No category yet — click to set</span></button><input type="hidden" id="tx-category" value="">`;
+  } else {
+    el.innerHTML = `<button type="button" class="chip-btn" onclick="editTxCatPicker()"><span class="chip ${txAiSuggested?'chip-ai':''}">${txAiSuggested?'✨ ':''}${esc(selected)}</span></button><input type="hidden" id="tx-category" value="${esc(selected)}">`;
+  }
+}
+function editTxCatPicker(){
+  const el = document.getElementById('tx-cat-picker');
+  const current = document.getElementById('tx-category').value;
+  el.innerHTML = `<select id="tx-category" autofocus onchange="onTxCatPicked(this.value)" onblur="onTxCatPicked(this.value)">${categoryOptions(current)}</select>`;
+  document.getElementById('tx-category').focus();
+}
+function onTxCatPicked(val){ txAiSuggested = false; renderTxCatPicker(val); }
+function onTxItemChanged(){ document.getElementById('tx-ai-note').style.display = 'none'; }
+
+async function suggestTxCategory(){
+  const item = document.getElementById('tx-item').value.trim();
+  if (!item) return;
+  const btn = document.getElementById('tx-suggest-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin">↻</span> Thinking…';
+  try {
+    const amount = document.getElementById('tx-amount').value;
+    const currency = document.getElementById('tx-currency').value;
+    const result = await classifyItem(item, amount, currency);
+    txAiMeta = result; txAiSuggested = true;
+    renderTxCatPicker(result.category);
+    const note = document.getElementById('tx-ai-note');
+    note.style.display = 'block';
+    note.textContent = `AI suggestion · ${result.confidence}% confident — ${result.reasoning}`;
+  } catch(e){
+    const note = document.getElementById('tx-ai-note');
+    note.style.display = 'block'; note.className = 'ai-note ai-note-error';
+    note.textContent = "Couldn't reach the classifier — pick a category manually.";
+  } finally {
+    btn.disabled = false; btn.innerHTML = '✨ Suggest';
+  }
+}
+
+function submitTxForm(e){
+  e.preventDefault();
+  const id = document.getElementById('tx-id').value || uid();
+  const tx = {
+    id,
+    date: document.getElementById('tx-date').value,
+    description: document.getElementById('tx-item').value.trim(),
+    amount: Number(document.getElementById('tx-amount').value),
+    currency: document.getElementById('tx-currency').value,
+    category: document.getElementById('tx-category').value || 'Other',
+    secondary: document.getElementById('tx-secondary').value.trim(),
+    comment: document.getElementById('tx-comment').value.trim(),
+    aiSuggested: txAiSuggested,
+    aiConfidence: txAiMeta ? txAiMeta.confidence : null,
+    aiReasoning: txAiMeta ? txAiMeta.reasoning : null,
+    aiOverridden: false,
+  };
+  const idx = state.transactions.findIndex(t => t.id === id);
+  if (idx >= 0) state.transactions[idx] = tx; else state.transactions.unshift(tx);
+  closeTxForm(); saveState(); renderTxSummary(); renderTxList();
+}
+function deleteTx(id){
+  if (!confirm('Delete this transaction?')) return;
+  state.transactions = state.transactions.filter(t => t.id !== id);
+  saveState(); renderTxSummary(); renderTxList();
+}
+function correctTxCategory(id, newCategory){
+  const tx = state.transactions.find(t => t.id === id);
+  if (!tx || tx.category === newCategory) return;
+  tx.category = newCategory; tx.aiOverridden = !!tx.aiSuggested;
+  saveState(); renderTxList();
+}
+function toggleTxComment(id){
+  const row = document.querySelector(`.tx-row[data-id="${id}"]`);
+  const box = row.querySelector('.tx-comment');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+function renderTxSummary(){
+  const totals = {};
+  state.transactions.forEach(t => { totals[t.currency] = (totals[t.currency]||0) + Number(t.amount); });
+  const el = document.getElementById('tx-summary');
+  const entries = Object.entries(totals);
+  el.innerHTML = entries.length === 0 ? '<span class="muted">No transactions yet.</span>' :
+    entries.map(([cur,val]) => `<div class="summary-pill"><span class="summary-cur">${cur}</span><span class="mono summary-val">${fmtMoney(val)}</span></div>`).join('');
+}
+
+function renderTxList(){
+  const filterCat = document.getElementById('tx-filter-cat').value;
+  const filtered = filterCat ? state.transactions.filter(t => t.category === filterCat) : state.transactions;
+  const byDate = {};
+  filtered.forEach(t => { (byDate[t.date] ||= []).push(t); });
+  const dates = Object.keys(byDate).sort().reverse();
+  const el = document.getElementById('tx-list');
+  if (dates.length === 0){
+    el.innerHTML = `<div class="empty-state">🧾<p>No transactions logged yet. Add one, or import a bank statement — the assistant will suggest categories using your own history.</p></div>`;
+    return;
+  }
+  el.innerHTML = dates.map(date => `
+    <div class="tx-group-date mono">${date}</div>
+    ${byDate[date].map(renderTxRowHtml).join('')}
+  `).join('');
+}
+function renderTxRowHtml(tx){
+  const aiOn = tx.aiSuggested && !tx.aiOverridden;
+  return `
+  <div class="tx-row" data-id="${tx.id}">
+    <div class="tx-date mono">${tx.date}</div>
+    <div class="tx-main">
+      <div class="tx-desc">${esc(tx.description)}</div>
+      <div class="tx-tags">
+        <span class="cat-cell">
+          <button class="chip-btn" onclick="startCatEdit('${tx.id}')"><span class="chip ${aiOn?'chip-ai':''}">${aiOn?'✨ ':''}${esc(tx.category)}</span></button>
+        </span>
+        ${tx.secondary ? `<span class="chip chip-muted">${esc(tx.secondary)}</span>` : ''}
+      </div>
+    </div>
+    <div class="tx-amount mono">${tx.currency} ${fmtMoney(tx.amount)}</div>
+    <div class="tx-actions">
+      <button class="icon-btn" title="Comment" onclick="toggleTxComment('${tx.id}')">💬</button>
+      <button class="icon-btn" title="Edit" onclick='editTx("${tx.id}")'>✎</button>
+      <button class="icon-btn icon-btn-danger" title="Delete" onclick="deleteTx('${tx.id}')">🗑</button>
+    </div>
+    <div class="tx-comment" style="display:none">${tx.comment ? esc(tx.comment) : '<em>No comment added.</em>'}</div>
+  </div>`;
+}
+function startCatEdit(id){
+  const tx = state.transactions.find(t => t.id === id);
+  const cell = document.querySelector(`.tx-row[data-id="${id}"] .cat-cell`);
+  cell.innerHTML = `<select autofocus onchange="correctTxCategory('${id}', this.value)" onblur="renderTxList()">${categoryOptions(tx.category)}</select>`;
+  cell.querySelector('select').focus();
+}
+function editTx(id){ const tx = state.transactions.find(t => t.id === id); if (tx) openTxForm(tx); }
+
+/* ---- Bank statement import ---- */
+function openImportPanel(){
+  closeTxForm();
+  importRows = null;
+  const el = document.getElementById('import-panel');
+  el.style.display = 'block';
+  renderImportPanel();
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function closeImportPanel(){ document.getElementById('import-panel').style.display = 'none'; importRows = null; }
+
+function renderImportPanel(){
+  const el = document.getElementById('import-panel');
+  if (!importRows){
+    el.innerHTML = `
+      <div class="field-label" style="margin-bottom:8px;">Bank statement (PDF)</div>
+      <div class="import-drop">
+        📄
+        <label class="btn-ghost btn-sm import-choose">
+          <span id="import-filename">Choose PDF file</span>
+          <input type="file" accept="application/pdf" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="onImportFileChosen(this)">
+        </label>
+        <p class="muted" style="margin:6px 0 0;text-align:center;">The AI reads the statement and drafts one transaction per line — using your existing ledger as its guide — and you review before anything is saved.</p>
+      </div>
+      <p class="ai-note ai-note-error" id="import-error" style="display:none;"></p>
+      <div class="form-actions">
+        <button type="button" class="btn-ghost" onclick="closeImportPanel()">Cancel</button>
+        <button type="button" class="btn-primary" id="import-read-btn" onclick="runImportParse()" disabled>✨ Read statement</button>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div class="import-review-head">📄 <span>${importRows.length} transaction${importRows.length===1?'':'s'} found — review before importing</span></div>
+      <div class="import-rows" id="import-rows-container">${importRows.map(renderImportRowHtml).join('')}</div>
+      <div class="form-actions">
+        <button type="button" class="btn-ghost" onclick="closeImportPanel()">Cancel</button>
+        <button type="button" class="btn-primary" onclick="commitImport()">Import <span id="import-count">${importRows.filter(r=>r.selected).length}</span> transactions</button>
+      </div>`;
+  }
+}
+let importFile = null;
+function onImportFileChosen(input){
+  const f = input.files[0];
+  if (!f) return;
+  if (f.type !== 'application/pdf'){ showImportError('Please choose a PDF file.'); return; }
+  importFile = f;
+  document.getElementById('import-filename').textContent = f.name;
+  document.getElementById('import-read-btn').disabled = false;
+  document.getElementById('import-error').style.display = 'none';
+}
+function showImportError(msg){
+  const el = document.getElementById('import-error');
+  el.style.display = 'block'; el.textContent = '⚠ ' + msg;
+}
+async function runImportParse(){
+  if (!importFile) return;
+  const btn = document.getElementById('import-read-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin">↻</span> Reading statement…';
+  try {
+    const base64 = await fileToBase64(importFile);
+    const rows = await parseStatementPdf(base64);
+    if (rows.length === 0){ showImportError("No transactions were found in that PDF — it may be a scanned image or an unsupported layout."); btn.disabled = false; btn.innerHTML = '✨ Read statement'; return; }
+    importRows = rows;
+    renderImportPanel();
+  } catch(e){
+    showImportError("Couldn't read that statement. Double-check it's a text-based PDF and try again.");
+    btn.disabled = false; btn.innerHTML = '✨ Read statement';
+  }
+}
+function renderImportRowHtml(r){
+  return `
+  <div class="import-row" data-row-id="${r.rowId}">
+    <input type="checkbox" ${r.selected?'checked':''} onchange="updateImportRow('${r.rowId}','selected',this.checked)">
+    <input type="date" class="mono" value="${r.date}" onchange="updateImportRow('${r.rowId}','date',this.value)">
+    <input type="text" value="${esc(r.description)}" placeholder="Item" oninput="updateImportRow('${r.rowId}','description',this.value)">
+    <div class="amount-row import-amount">
+      <select onchange="updateImportRow('${r.rowId}','currency',this.value)">${CURRENCIES.map(c=>`<option value="${c}" ${c===r.currency?'selected':''}>${c}</option>`).join('')}</select>
+      <input type="number" step="0.01" value="${r.amount}" oninput="updateImportRow('${r.rowId}','amount',this.value)">
+    </div>
+    <select onchange="updateImportRow('${r.rowId}','category',this.value)">${categoryOptions(r.category)}</select>
+    ${r.confidence!=null ? `<span class="chip chip-ai import-conf">${r.confidence}%</span>` : '<span></span>'}
+    <button type="button" class="icon-btn icon-btn-danger" onclick="removeImportRow('${r.rowId}')">🗑</button>
+  </div>`;
+}
+function updateImportRow(rowId, field, value){
+  const row = importRows.find(r => r.rowId === rowId);
+  if (!row) return;
+  row[field] = field === 'selected' ? value : value;
+  if (field === 'selected') document.getElementById('import-count').textContent = importRows.filter(r=>r.selected).length;
+}
+function removeImportRow(rowId){
+  importRows = importRows.filter(r => r.rowId !== rowId);
+  renderImportPanel();
+}
+function commitImport(){
+  const toImport = importRows.filter(r => r.selected && r.description.trim() && Number(r.amount));
+  const newTxs = toImport.map(r => ({
+    id: uid(), date: r.date, description: r.description.trim(), amount: Number(r.amount), currency: r.currency,
+    category: r.category, secondary: '', comment: '',
+    aiSuggested: true, aiConfidence: r.confidence, aiReasoning: 'Extracted from imported bank statement.', aiOverridden: false,
+  }));
+  state.transactions = newTxs.concat(state.transactions);
+  closeImportPanel(); saveState(); renderTxSummary(); renderTxList();
+}
+
+/* ======================================================================
+   LOANS
+   ====================================================================== */
+function loanOutstanding(loan){
+  const paid = (loan.payments||[]).reduce((s,p) => s + Number(p.amount), 0);
+  return Number(loan.principal) - paid;
+}
+function openLoanForm(){
+  const f = document.getElementById('loan-form');
+  f.style.display = 'grid';
+  document.getElementById('loan-direction').value = 'lent';
+  document.getElementById('loan-counterparty').value = '';
+  document.getElementById('loan-currency').value = 'SGD';
+  document.getElementById('loan-principal').value = '';
+  document.getElementById('loan-date').value = todayISO();
+  document.getElementById('loan-rate').value = '';
+  document.getElementById('loan-duedate').value = '';
+  document.getElementById('loan-notes').value = '';
+  f.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+function closeLoanForm(){ document.getElementById('loan-form').style.display = 'none'; }
+function submitLoanForm(e){
+  e.preventDefault();
+  const loan = {
+    id: uid(), direction: document.getElementById('loan-direction').value,
+    counterparty: document.getElementById('loan-counterparty').value.trim(),
+    principal: Number(document.getElementById('loan-principal').value),
+    currency: document.getElementById('loan-currency').value,
+    date: document.getElementById('loan-date').value,
+    rate: document.getElementById('loan-rate').value ? Number(document.getElementById('loan-rate').value) : null,
+    dueDate: document.getElementById('loan-duedate').value || null,
+    notes: document.getElementById('loan-notes').value.trim(),
+    payments: [],
+  };
+  state.loans.unshift(loan);
+  closeLoanForm(); saveState(); renderLoanList();
+}
+function deleteLoan(id){
+  if (!confirm('Delete this loan record?')) return;
+  state.loans = state.loans.filter(l => l.id !== id);
+  saveState(); renderLoanList();
+}
+function showPaymentForm(id){
+  const el = document.querySelector(`.loan-card[data-id="${id}"] .payment-slot`);
+  el.innerHTML = `
+    <div class="payment-form">
+      <input type="date" id="pay-date-${id}" value="${todayISO()}">
+      <input type="number" step="0.01" placeholder="Amount" id="pay-amt-${id}">
+      <button class="btn-primary btn-sm" onclick="addPayment('${id}')">Log</button>
+      <button class="btn-ghost btn-sm" onclick="renderLoanList()">Cancel</button>
+    </div>`;
+}
+function addPayment(id){
+  const amt = Number(document.getElementById(`pay-amt-${id}`).value);
+  const date = document.getElementById(`pay-date-${id}`).value;
+  if (!amt) return;
+  const loan = state.loans.find(l => l.id === id);
+  loan.payments.push({ id: uid(), date, amount: amt });
+  saveState(); renderLoanList();
+}
+function renderLoanList(){
+  const el = document.getElementById('loan-list');
+  if (state.loans.length === 0){
+    el.innerHTML = `<div class="empty-state">🏦<p>No loans on record. Loans you give or take are kept apart from your expense totals.</p></div>`;
+    return;
+  }
+  el.innerHTML = state.loans.map(loan => {
+    const outstanding = loanOutstanding(loan), settled = outstanding <= 0.005;
+    return `
+    <div class="panel-card loan-card" data-id="${loan.id}">
+      <div class="loan-head">
+        <div><span class="loan-badge ${loan.direction==='lent'?'loan-badge-lent':'loan-badge-borrowed'}">${loan.direction==='lent'?'Lent to':'Borrowed from'}</span>
+        <strong style="margin-left:8px;">${esc(loan.counterparty)}</strong></div>
+        <button class="icon-btn icon-btn-danger" onclick="deleteLoan('${loan.id}')">🗑</button>
+      </div>
+      <div class="loan-body">
+        <div><span class="muted">Principal</span><div class="mono">${loan.currency} ${fmtMoney(loan.principal)}</div></div>
+        <div><span class="muted">Outstanding</span><div class="mono ${settled?'ok':''}">${loan.currency} ${fmtMoney(Math.max(outstanding,0))}</div></div>
+        <div><span class="muted">Issued</span><div class="mono">${loan.date}</div></div>
+        ${loan.rate!=null?`<div><span class="muted">Interest</span><div class="mono">${loan.rate}%</div></div>`:''}
+        ${loan.dueDate?`<div><span class="muted">Due</span><div class="mono">${loan.dueDate}</div></div>`:''}
+      </div>
+      ${loan.notes?`<p class="loan-notes">${esc(loan.notes)}</p>`:''}
+      ${loan.payments.length ? `<div class="payment-list">${loan.payments.map(p=>`<div class="payment-row mono"><span>${p.date}</span><span>${loan.currency} ${fmtMoney(p.amount)}</span></div>`).join('')}</div>` : ''}
+      <div class="payment-slot">${settled ? '<span class="chip chip-ok">Settled</span>' : `<button class="btn-ghost btn-sm" onclick="showPaymentForm('${loan.id}')">+ Log repayment</button>`}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ======================================================================
+   CURRENCY EXCHANGE
+   ====================================================================== */
+function openFxForm(){
+  const f = document.getElementById('fx-form');
+  f.style.display = 'grid';
+  document.getElementById('fx-date').value = todayISO();
+  document.getElementById('fx-from-cur').value = 'SGD';
+  document.getElementById('fx-to-cur').value = CURRENCIES[1] || CURRENCIES[0];
+  document.getElementById('fx-from-amt').value = '';
+  document.getElementById('fx-to-amt').value = '';
+  document.getElementById('fx-comment').value = '';
+  updateFxRateDisplay();
+  f.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+function closeFxForm(){ document.getElementById('fx-form').style.display = 'none'; }
+function updateFxRateDisplay(){
+  const from = Number(document.getElementById('fx-from-amt').value);
+  const to = Number(document.getElementById('fx-to-amt').value);
+  document.getElementById('fx-rate-display').textContent = (from && to) ? (to/from).toFixed(4) : '—';
+}
+function submitFxForm(e){
+  e.preventDefault();
+  const fromAmt = Number(document.getElementById('fx-from-amt').value);
+  const toAmt = Number(document.getElementById('fx-to-amt').value);
+  const rec = {
+    id: uid(), date: document.getElementById('fx-date').value,
+    fromCur: document.getElementById('fx-from-cur').value, fromAmt,
+    toCur: document.getElementById('fx-to-cur').value, toAmt,
+    rate: toAmt / fromAmt, comment: document.getElementById('fx-comment').value.trim(),
+  };
+  state.fx.unshift(rec);
+  closeFxForm(); saveState(); renderFxList();
+}
+function deleteFx(id){
+  if (!confirm('Delete this exchange record?')) return;
+  state.fx = state.fx.filter(r => r.id !== id);
+  saveState(); renderFxList();
+}
+function renderFxList(){
+  const el = document.getElementById('fx-list');
+  if (state.fx.length === 0){
+    el.innerHTML = `<div class="empty-state">⇄<p>No exchanges logged. Record one whenever you convert cash so you can see the rates you're actually getting.</p></div>`;
+    return;
+  }
+  el.innerHTML = state.fx.slice().sort((a,b)=> a.date < b.date ? 1 : -1).map(rec => `
+    <div class="panel-card fx-row">
+      <div class="mono">${rec.date}</div>
+      <div class="fx-conv"><span class="mono">${rec.fromCur} ${fmtMoney(rec.fromAmt)}</span> ⇄ <span class="mono">${rec.toCur} ${fmtMoney(rec.toAmt)}</span></div>
+      <div class="mono fx-rate">1 ${rec.fromCur} = ${rec.rate.toFixed(4)} ${rec.toCur}</div>
+      <button class="icon-btn icon-btn-danger" onclick="deleteFx('${rec.id}')">🗑</button>
+      ${rec.comment?`<div class="fx-comment">${esc(rec.comment)}</div>`:''}
+    </div>`).join('');
+}
+
+/* ======================================================================
+   BOOT
+   ====================================================================== */
+waitForGoogleIdentity(initGoogleAuth);
+</script>
+</body>
+</html>
