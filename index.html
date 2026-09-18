@@ -274,12 +274,9 @@ a { color: var(--teal); }
    ====================================================================== */
 const CONFIG = {
   // Your Cloudflare Worker URL from `wrangler deploy` (no trailing slash).
-  API_BASE: 'https://expenditure-tracker-api.expenditure-tracker.workers.dev/',
-  // Reused from your other app: this works as-is if this site shares the
-  // same origin (e.g. same github.io domain) as that app's authorized
-  // JavaScript origins. Otherwise create your own OAuth client ID in
-  // Google Cloud Console and swap it in here.
-  GOOGLE_CLIENT_ID: '210912226684-l0btp1egeoakjn4ujm7flkq7nj5jsak2.apps.googleusercontent.com',
+  API_BASE: 'https://expenditure-tracker-api.expenditure-tracker.workers.dev',
+  // Your own OAuth client ID, created in Google Cloud Console for this app.
+  GOOGLE_CLIENT_ID: '572760733608-2doa5cv817dcib9m928it6r9sq2blil4.apps.googleusercontent.com',
   GOOGLE_ACCOUNT_HINT: '', // optional: your email, skips the account picker
 };
 
@@ -317,7 +314,7 @@ function waitForGoogleIdentity(cb, attempts){
 }
 function initGoogleAuth(){
   tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: 572760733608-2doa5cv817dcib9m928it6r9sq2blil4.apps.googleusercontent.com,
+    client_id: CONFIG.GOOGLE_CLIENT_ID,
     scope: DRIVE_SCOPE,
     hint: CONFIG.GOOGLE_ACCOUNT_HINT || undefined,
     callback: (resp) => { if (resp && resp.access_token){ driveAccessToken = resp.access_token; setAuthStatus(''); onSignedIn(); } else handleAuthAttemptFailed(); },
