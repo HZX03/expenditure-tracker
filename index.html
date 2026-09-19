@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <style>
 :root {
   --paper: #EFEBE1; --paper-raised: #F8F5EC; --ink: #23271F; --ink-soft: #5B5A4E;
@@ -534,6 +535,15 @@ async function classifyItem(description, amount, currency){
 }
 async function parseStatementPdf(base64, mimeType){
   const result = await callWorker('/parse-statement', { pdfBase64: base64, mimeType, categories: state.categories, history: recentHistory() });
+  return normalizeStatementRows(result);
+}
+// Same as parseStatementPdf but sends pre-extracted, PII-redacted text
+// instead of the raw PDF bytes — see extractAndRedactPdf() below.
+async function parseStatementText(text){
+  const result = await callWorker('/parse-statement', { text, categories: state.categories, history: recentHistory() });
+  return normalizeStatementRows(result);
+}
+function normalizeStatementRows(result){
   const rows = (result.transactions || []).map(r => ({
     rowId: uid(), date: r.date || todayISO(), description: r.item || '', amount: Number(r.amount)||0,
     currency: CURRENCIES.includes(r.currency) ? r.currency : 'SGD',
@@ -549,6 +559,72 @@ function fileToBase64(file){
     reader.onerror = () => reject(new Error('Could not read file'));
     reader.readAsDataURL(file);
   });
+}
+
+/* ======================================================================
+   CLIENT-SIDE PDF TEXT EXTRACTION + PII REDACTION
+   Runs entirely in the browser, before anything is sent to Gemini. Only
+   for PDFs (they have a real text layer to work with) — photos still go
+   through as full images, since there's no text to extract client-side.
+   This is a best-effort redaction, not a guarantee: it catches labeled
+   fields (account numbers, IBAN, sort code, card numbers) reliably, and
+   a common "Mr/Mrs/Ms Name + address block" pattern heuristically. It
+   won't catch every possible statement layout.
+   ====================================================================== */
+let pdfWorkerConfigured = false;
+function ensurePdfWorker(){
+  if (pdfWorkerConfigured || typeof pdfjsLib === 'undefined') return;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+  pdfWorkerConfigured = true;
+}
+async function extractPdfText(file){
+  if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js not available');
+  ensurePdfWorker();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let text = '';
+  for (let i = 1; i <= pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(it => it.str).join(' ') + '\n\n';
+  }
+  return text;
+}
+function redactPii(text){
+  let out = text;
+  // Labeled identifiers — high-precision, anchored to their field name.
+  // The "value" portion is restricted to the SAME LINE only (space/tab,
+  // never \n) — an earlier version used \s here, which is a newline too,
+  // and could greedily eat into the next line's actual transaction date.
+  out = out.replace(/(IBAN|International Bank Account Number)[ \t]*[:\s][ \t]*[A-Z0-9]{10,34}/gi, '$1: [REDACTED]');
+  out = out.replace(/(Bank Identifier Code|BIC|SWIFT(?:\s*code)?)[ \t]*[:\s][ \t]*[A-Z0-9]{6,11}/gi, '$1: [REDACTED]');
+  out = out.replace(/(Account\s*(?:No\.?|Number)|Acc(?:ount)?\s*No\.?)[ \t]*[:\s]?[ \t]*[\d][\d\- \t]{2,18}\d/gi, '$1: [REDACTED]');
+  out = out.replace(/(Sort\s*[Cc]ode)[ \t]*[:\s]?[ \t]*[\d][\d\- \t]{2,10}\d/gi, '$1: [REDACTED]');
+  out = out.replace(/\bS\/N[ \t]*[:\s]?[ \t]*[A-Z0-9]{6,}/gi, 'S/N: [REDACTED]');
+  // Card-like number sequences (12-19 digits, optionally grouped/dashed) —
+  // also same-line only, for the same reason as above.
+  out = out.replace(/\b(?:\d[ -]?){12,19}\b/g, '[REDACTED]');
+  // "Mr/Mrs/Ms/Dr Name" salutation followed by the next few short lines
+  // (the usual shape of a mailing-address block on a bank letter).
+  out = out.replace(/((?:Mr|Mrs|Ms|Dr)\.?\s+[A-Z][A-Za-z .'-]+)(\n[^\n]{0,60}){1,4}/g, '[NAME/ADDRESS REDACTED]');
+  // Any other bare run of 6+ digits (account/reference/phone numbers) —
+  // safe against amounts and dates, which break up into shorter groups
+  // around a decimal point or slash.
+  out = out.replace(/\b\d{6,}\b/g, '[REDACTED]');
+  return out;
+}
+// Tries the redact-and-send-text path; falls back to sending the original
+// PDF whole if extraction fails or the PDF turns out to have no real text
+// layer (e.g. a scanned statement saved as PDF).
+async function extractAndRedactPdf(file){
+  try {
+    const text = await extractPdfText(file);
+    if (text.trim().length < 200) throw new Error('Too little text extracted — likely a scanned PDF');
+    return { text: redactPii(text) };
+  } catch (e){
+    const base64 = await fileToBase64(file);
+    return { base64, fallback: true };
+  }
 }
 
 /* ======================================================================
@@ -871,11 +947,17 @@ function renderImportBatchHtml(b){
     return `<div class="panel-card import-batch-error"><strong>${esc(b.originalFilename)}</strong> — ${esc(b.errorMsg)}</div>`;
   }
   if (b.rows.length === 0) return '';
+  const redactionNote = b.file.type === 'application/pdf'
+    ? (b.redacted
+        ? `<span class="chip chip-ok" title="Account number, IBAN, sort code and name/address were stripped in your browser before this was sent">🔒 Redacted before sending</span>`
+        : `<span class="chip chip-muted" title="Couldn't extract text from this PDF (likely a scanned document), so the full file was sent">⚠ Sent unredacted (no text layer found)</span>`)
+    : '';
   return `
   <div class="import-batch">
     <div class="import-batch-header">
       <input type="text" class="import-batch-name" value="${esc(b.suggestedName || b.originalFilename)}" oninput="updateBatchName('${b.batchId}', this.value)" title="AI-suggested name — edit if you like">
       <span class="muted">${b.rows.length} transaction${b.rows.length===1?'':'s'} · from ${esc(b.originalFilename)}</span>
+      ${redactionNote}
     </div>
     <div class="import-rows">${b.rows.map(r => renderImportRowHtml(r, b.batchId)).join('')}</div>
   </div>`;
@@ -895,12 +977,22 @@ async function runImportParse(){
     const freshBtn = document.getElementById('import-read-btn');
     if (freshBtn){ freshBtn.disabled = true; freshBtn.innerHTML = `<span class="spin">↻</span> Reading ${esc(b.originalFilename)}…`; }
     try {
-      const base64 = await fileToBase64(b.file);
-      const { suggestedName, rows } = await parseStatementPdf(base64, b.file.type);
-      b.rows = rows;
-      b.suggestedName = suggestedName || b.originalFilename.replace(/\.(pdf|jpe?g|png|webp|heic|heif)$/i, '');
-      b.status = rows.length === 0 ? 'error' : 'done';
-      if (rows.length === 0) b.errorMsg = 'No transactions found — the image or PDF may be unclear or an unsupported layout.';
+      let result;
+      if (b.file.type === 'application/pdf'){
+        const extracted = await extractAndRedactPdf(b.file);
+        result = extracted.text
+          ? await parseStatementText(extracted.text)
+          : await parseStatementPdf(extracted.base64, 'application/pdf');
+        b.redacted = !extracted.fallback;
+      } else {
+        const base64 = await fileToBase64(b.file);
+        result = await parseStatementPdf(base64, b.file.type);
+        b.redacted = false;
+      }
+      b.rows = result.rows;
+      b.suggestedName = result.suggestedName || b.originalFilename.replace(/\.(pdf|jpe?g|png|webp|heic|heif)$/i, '');
+      b.status = result.rows.length === 0 ? 'error' : 'done';
+      if (result.rows.length === 0) b.errorMsg = 'No transactions found — the image or PDF may be unclear or an unsupported layout.';
     } catch(e){
       b.status = 'error';
       b.errorMsg = (e && e.message) ? e.message : "Couldn't read this statement — check the file is clear and try again.";
