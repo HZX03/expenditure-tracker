@@ -1,0 +1,8 @@
+# Real HTTP response headers — used automatically by Cloudflare Pages (and Netlify). GitHub Pages ignores this file
+# and relies on the <meta> Content-Security-Policy in index.html, which carries the same rules except frame-ancestors
+# (a header-only directive: it stops other sites from framing Ledger).
+# If you change the Worker URL (CONFIG.API_BASE in app.js), change it in connect-src here AND in index.html.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com/gsi/ https://expenditure-tracker-api.expenditure-tracker.workers.dev; frame-src https://accounts.google.com/gsi/; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
