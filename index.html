@@ -62,6 +62,27 @@ a { color: var(--teal); }
 .toolbar-left { flex: 1; min-width: 160px; }
 .toolbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.filter-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+.filter-bar select, .filter-bar input[type="text"] { width: auto; min-width: 130px; }
+.filter-bar input[type="date"] { width: auto; }
+.link-btn { background: none; border: none; padding: 0; color: var(--teal); font-size: 12px; text-decoration: underline; cursor: pointer; }
+
+.import-log-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.import-log-name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.import-log-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+.breakdown-row { display: grid; grid-template-columns: 150px 1fr 90px 50px; align-items: center; gap: 10px; padding: 6px 0; }
+.breakdown-label { font-size: 13px; }
+.breakdown-bar-track { background: var(--paper); border-radius: 4px; height: 10px; overflow: hidden; }
+.breakdown-bar { background: var(--gold); height: 100%; border-radius: 4px; }
+.breakdown-bar-month { background: var(--teal); }
+.breakdown-val { font-size: 12.5px; text-align: right; }
+.breakdown-pct { font-size: 12px; color: var(--ink-soft); text-align: right; }
+@media (max-width: 640px) {
+  .breakdown-row { grid-template-columns: 100px 1fr 70px; }
+  .breakdown-pct { display: none; }
+}
+
 .btn-primary { display: inline-flex; align-items: center; gap: 6px; background: var(--ink); color: var(--paper-raised); border: none; padding: 9px 16px; border-radius: 7px; font-weight: 600; font-size: 13.5px; }
 .btn-primary:disabled { opacity: .5; cursor: default; }
 .btn-ghost { background: none; border: 1px solid var(--rule); color: var(--ink-soft); padding: 9px 16px; border-radius: 7px; font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
@@ -167,6 +188,8 @@ a { color: var(--teal); }
     <button class="tab-btn active" id="tabBtn-transactions" onclick="setTab('transactions')">Transactions</button>
     <button class="tab-btn" id="tabBtn-loans" onclick="setTab('loans')">Loans</button>
     <button class="tab-btn" id="tabBtn-fx" onclick="setTab('fx')">Currency Exchange</button>
+    <button class="tab-btn" id="tabBtn-imports" onclick="setTab('imports')">Imports</button>
+    <button class="tab-btn" id="tabBtn-breakdown" onclick="setTab('breakdown')">Breakdown</button>
   </nav>
 </header>
 
@@ -177,11 +200,22 @@ a { color: var(--teal); }
     <div class="summary-strip" id="tx-summary"></div>
 
     <div class="toolbar">
-      <div class="toolbar-left"><select id="tx-filter-cat" onchange="renderTxList()"><option value="">All categories</option></select></div>
+      <div class="toolbar-left"><span class="muted" id="tx-filter-summary"></span></div>
       <div class="toolbar-right">
         <button class="btn-ghost" onclick="openImportPanel()">⬆ Import statement</button>
         <button class="btn-primary" onclick="openTxForm()">+ Add transaction</button>
       </div>
+    </div>
+
+    <div class="filter-bar" id="filter-bar">
+      <input type="hidden" id="tx-filter-import" value="">
+      <select id="tx-filter-cat" onchange="renderTxList()"><option value="">All categories</option></select>
+      <select id="tx-filter-currency" onchange="renderTxList()"><option value="">All currencies</option></select>
+      <input type="text" id="tx-filter-secondary" placeholder="Secondary tag…" oninput="renderTxList()">
+      <input type="text" id="tx-filter-search" placeholder="Search item…" oninput="renderTxList()">
+      <input type="date" id="tx-filter-date-from" title="From date" oninput="renderTxList()">
+      <input type="date" id="tx-filter-date-to" title="To date" oninput="renderTxList()">
+      <button type="button" class="btn-ghost btn-sm" onclick="clearTxFilters()">Clear filters</button>
     </div>
 
     <!-- Add / edit transaction form (static — never re-rendered while typing) -->
@@ -266,6 +300,23 @@ a { color: var(--teal); }
     <div id="fx-list"></div>
   </div>
 
+  <!-- ============================= IMPORTS ============================= -->
+  <div class="view" id="view-imports">
+    <div class="toolbar">
+      <div class="toolbar-left"><span class="muted">A log of every bank statement you've imported, and what it added.</span></div>
+    </div>
+    <div id="imports-list"></div>
+  </div>
+
+  <!-- ============================= BREAKDOWN ============================= -->
+  <div class="view" id="view-breakdown">
+    <div class="toolbar">
+      <div class="toolbar-left"><span class="muted">Spend by category and by month. Loans and FX aren't included.</span></div>
+      <div class="toolbar-right"><select id="breakdown-currency" onchange="renderBreakdown()"></select></div>
+    </div>
+    <div id="breakdown-content"></div>
+  </div>
+
 </main>
 
 <script>
@@ -289,7 +340,7 @@ const DRIVE_FOLDER_NAME = 'Expenditure Tracker';
 /* ======================================================================
    STATE
    ====================================================================== */
-let state = { transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [] };
+let state = { transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [], imports: [] };
 let tab = 'transactions';
 let txAiMeta = null;      // { confidence, reasoning } for the form currently open
 let txAiSuggested = false;
@@ -409,7 +460,7 @@ async function loadState(){
       driveFileId = await driveFindFile();
       if (driveFileId){
         const text = await driveGetFileContent(driveFileId);
-        if (text){ const parsed = JSON.parse(text); state = Object.assign({ transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [] }, parsed); }
+        if (text){ const parsed = JSON.parse(text); state = Object.assign({ transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [], fx: [], imports: [] }, parsed); }
       }
       loaded = true;
     } catch(e){ console.log(`Drive load attempt ${attempt}/3 failed:`, e); if (attempt < 3) await new Promise(r => setTimeout(r, 400*attempt)); }
@@ -479,10 +530,12 @@ function fileToBase64(file){
    ====================================================================== */
 function setTab(t){
   tab = t;
-  ['transactions','loans','fx'].forEach(id => {
+  ['transactions','loans','fx','imports','breakdown'].forEach(id => {
     document.getElementById('view-' + id).classList.toggle('active', id === t);
     document.getElementById('tabBtn-' + id).classList.toggle('active', id === t);
   });
+  if (t === 'imports') renderImportsList();
+  if (t === 'breakdown') renderBreakdown();
 }
 
 /* ======================================================================
@@ -497,6 +550,10 @@ function populateStaticSelects(){
   document.getElementById('fx-to-cur').value = CURRENCIES[1] || CURRENCIES[0];
   const filterCat = document.getElementById('tx-filter-cat');
   filterCat.innerHTML = '<option value="">All categories</option>' + state.categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const filterCur = document.getElementById('tx-filter-currency');
+  filterCur.innerHTML = '<option value="">All currencies</option>' + CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  const breakdownCur = document.getElementById('breakdown-currency');
+  breakdownCur.innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
 }
 function categoryOptions(selected){
   return '<option value="">Select…</option>' + state.categories.map(c => `<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('');
@@ -613,15 +670,52 @@ function renderTxSummary(){
     entries.map(([cur,val]) => `<div class="summary-pill"><span class="summary-cur">${cur}</span><span class="mono summary-val">${fmtMoney(val)}</span></div>`).join('');
 }
 
+function clearTxFilters(){
+  document.getElementById('tx-filter-cat').value = '';
+  document.getElementById('tx-filter-currency').value = '';
+  document.getElementById('tx-filter-secondary').value = '';
+  document.getElementById('tx-filter-search').value = '';
+  document.getElementById('tx-filter-date-from').value = '';
+  document.getElementById('tx-filter-date-to').value = '';
+  document.getElementById('tx-filter-import').value = '';
+  renderTxList();
+}
+function applyTxFilters(list){
+  const cat = document.getElementById('tx-filter-cat').value;
+  const cur = document.getElementById('tx-filter-currency').value;
+  const sec = document.getElementById('tx-filter-secondary').value.trim().toLowerCase();
+  const search = document.getElementById('tx-filter-search').value.trim().toLowerCase();
+  const from = document.getElementById('tx-filter-date-from').value;
+  const to = document.getElementById('tx-filter-date-to').value;
+  const importId = document.getElementById('tx-filter-import').value;
+  return list.filter(t => {
+    if (cat && t.category !== cat) return false;
+    if (cur && t.currency !== cur) return false;
+    if (sec && !(t.secondary || '').toLowerCase().includes(sec)) return false;
+    if (search && !(t.description || '').toLowerCase().includes(search)) return false;
+    if (from && t.date < from) return false;
+    if (to && t.date > to) return false;
+    if (importId && t.importId !== importId) return false;
+    return true;
+  });
+}
+function updateTxFilterSummary(shownCount, totalCount){
+  const el = document.getElementById('tx-filter-summary');
+  const importId = document.getElementById('tx-filter-import').value;
+  if (shownCount === totalCount && !importId){ el.textContent = ''; return; }
+  el.innerHTML = `Showing ${shownCount} of ${totalCount}` + (importId ? ` <button type="button" class="link-btn" onclick="document.getElementById('tx-filter-import').value='';renderTxList();">— clear import filter</button>` : '');
+}
 function renderTxList(){
-  const filterCat = document.getElementById('tx-filter-cat').value;
-  const filtered = filterCat ? state.transactions.filter(t => t.category === filterCat) : state.transactions;
+  const filtered = applyTxFilters(state.transactions);
+  updateTxFilterSummary(filtered.length, state.transactions.length);
   const byDate = {};
   filtered.forEach(t => { (byDate[t.date] ||= []).push(t); });
   const dates = Object.keys(byDate).sort().reverse();
   const el = document.getElementById('tx-list');
   if (dates.length === 0){
-    el.innerHTML = `<div class="empty-state">🧾<p>No transactions logged yet. Add one, or import a bank statement — the assistant will suggest categories using your own history.</p></div>`;
+    el.innerHTML = state.transactions.length === 0
+      ? `<div class="empty-state">🧾<p>No transactions logged yet. Add one, or import a bank statement — the assistant will suggest categories using your own history.</p></div>`
+      : `<div class="empty-state">🔍<p>No transactions match these filters.</p></div>`;
     return;
   }
   el.innerHTML = dates.map(date => `
@@ -755,13 +849,107 @@ function removeImportRow(rowId){
 }
 function commitImport(){
   const toImport = importRows.filter(r => r.selected && r.description.trim() && Number(r.amount));
+  if (toImport.length === 0){ closeImportPanel(); return; }
+  const importId = uid();
   const newTxs = toImport.map(r => ({
     id: uid(), date: r.date, description: r.description.trim(), amount: Number(r.amount), currency: r.currency,
     category: r.category, secondary: '', comment: '',
     aiSuggested: true, aiConfidence: r.confidence, aiReasoning: 'Extracted from imported bank statement.', aiOverridden: false,
+    importId,
   }));
   state.transactions = newTxs.concat(state.transactions);
+  state.imports.unshift({
+    id: importId, filename: importFile ? importFile.name : 'statement.pdf',
+    importedAt: new Date().toISOString(), count: newTxs.length, txIds: newTxs.map(t => t.id),
+  });
   closeImportPanel(); saveState(); renderTxSummary(); renderTxList();
+}
+
+/* ======================================================================
+   IMPORTS LOG
+   ====================================================================== */
+function renderImportsList(){
+  const el = document.getElementById('imports-list');
+  if (state.imports.length === 0){
+    el.innerHTML = `<div class="empty-state">📂<p>No statements imported yet. Each PDF you import will show up here with what it added.</p></div>`;
+    return;
+  }
+  el.innerHTML = state.imports.map(imp => {
+    const stillPresent = imp.txIds.filter(id => state.transactions.some(t => t.id === id)).length;
+    const when = new Date(imp.importedAt);
+    const whenStr = isNaN(when) ? imp.importedAt : when.toLocaleString();
+    return `
+    <div class="panel-card import-log-row">
+      <div class="import-log-main">
+        <div class="import-log-name">${esc(imp.filename)}</div>
+        <div class="muted">${whenStr} · ${imp.count} transaction${imp.count===1?'':'s'} imported${stillPresent!==imp.count ? ` (${stillPresent} still in your ledger)` : ''}</div>
+      </div>
+      <div class="import-log-actions">
+        <button class="btn-ghost btn-sm" onclick="viewImportTransactions('${imp.id}')">View transactions</button>
+        <button class="icon-btn icon-btn-danger" title="Remove this log entry (does not delete transactions)" onclick="deleteImportRecord('${imp.id}')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function viewImportTransactions(importId){
+  setTab('transactions');
+  clearTxFilters();
+  document.getElementById('tx-filter-import').value = importId;
+  renderTxList();
+}
+function deleteImportRecord(id){
+  if (!confirm('Remove this import log entry? The transactions it added will stay in your ledger.')) return;
+  state.imports = state.imports.filter(i => i.id !== id);
+  saveState(); renderImportsList();
+}
+
+/* ======================================================================
+   BREAKDOWN
+   ====================================================================== */
+function renderBreakdown(){
+  const currencySel = document.getElementById('breakdown-currency');
+  const currencies = [...new Set(state.transactions.map(t => t.currency))];
+  if (!currencies.includes(currencySel.value)) currencySel.value = currencies[0] || CURRENCIES[0];
+  const currency = currencySel.value;
+  const el = document.getElementById('breakdown-content');
+  const txs = state.transactions.filter(t => t.currency === currency);
+  if (txs.length === 0){
+    el.innerHTML = `<div class="empty-state">📊<p>No ${currency} transactions yet to break down.</p></div>`;
+    return;
+  }
+  const total = txs.reduce((s,t) => s + Number(t.amount), 0);
+
+  const byCat = {};
+  txs.forEach(t => { byCat[t.category] = (byCat[t.category]||0) + Number(t.amount); });
+  const catRows = Object.entries(byCat).sort((a,b) => b[1]-a[1]);
+  const maxCat = Math.max(...catRows.map(r => r[1]), 1);
+
+  const byMonth = {};
+  txs.forEach(t => { const m = t.date.slice(0,7); byMonth[m] = (byMonth[m]||0) + Number(t.amount); });
+  const monthRows = Object.entries(byMonth).sort((a,b) => b[0] < a[0] ? -1 : 1);
+  const maxMonth = Math.max(...monthRows.map(r => r[1]), 1);
+
+  el.innerHTML = `
+    <div class="panel-card">
+      <div class="field-label" style="margin-bottom:10px;">By category</div>
+      ${catRows.map(([cat,val]) => `
+        <div class="breakdown-row">
+          <span class="breakdown-label">${esc(cat)}</span>
+          <div class="breakdown-bar-track"><div class="breakdown-bar" style="width:${(val/maxCat*100).toFixed(1)}%"></div></div>
+          <span class="mono breakdown-val">${currency} ${fmtMoney(val)}</span>
+          <span class="mono breakdown-pct">${(val/total*100).toFixed(1)}%</span>
+        </div>`).join('')}
+    </div>
+    <div class="panel-card">
+      <div class="field-label" style="margin-bottom:10px;">By month</div>
+      ${monthRows.map(([month,val]) => `
+        <div class="breakdown-row">
+          <span class="breakdown-label mono">${month}</span>
+          <div class="breakdown-bar-track"><div class="breakdown-bar breakdown-bar-month" style="width:${(val/maxMonth*100).toFixed(1)}%"></div></div>
+          <span class="mono breakdown-val">${currency} ${fmtMoney(val)}</span>
+        </div>`).join('')}
+    </div>
+  `;
 }
 
 /* ======================================================================
