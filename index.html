@@ -342,7 +342,7 @@ const CONFIG = {
 
 const DEFAULT_CATEGORIES = ["Food & Dining","Groceries","Transport","Housing & Utilities","Shopping","Health","Entertainment","Travel","Education","Subscriptions","Fees & Charges","Other"];
 const CURRENCIES = ["SGD","USD","EUR","GBP","JPY","MYR","AUD","CNY","IDR","THB"];
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email';
 const DRIVE_FILE_NAME = 'expenditure-tracker-data.json';
 const DRIVE_FOLDER_NAME = 'Expenditure Tracker';
 
@@ -509,15 +509,21 @@ function recentHistory(){
   return state.transactions.slice(0, 200).map(t => ({ description: t.description, category: t.category }));
 }
 async function callWorker(path, body){
-  const res = await fetch(CONFIG.API_BASE + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!driveAccessToken) throw new Error('Not signed in');
+  const res = await fetch(CONFIG.API_BASE + path, {
+    method:'POST',
+    headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${driveAccessToken}`},
+    body: JSON.stringify(body),
+  });
+  if (res.status === 403) throw new Error('Not authorized to use this AI backend');
   if (!res.ok) throw new Error('Worker error ' + res.status);
   return res.json();
 }
 async function classifyItem(description, amount, currency){
   return callWorker('/classify', { description, amount, currency, categories: state.categories, history: recentHistory() });
 }
-async function parseStatementPdf(base64){
-  const result = await callWorker('/parse-statement', { pdfBase64: base64, categories: state.categories, history: recentHistory() });
+async function parseStatementPdf(base64, mimeType){
+  const result = await callWorker('/parse-statement', { pdfBase64: base64, mimeType, categories: state.categories, history: recentHistory() });
   const rows = (result.transactions || []).map(r => ({
     rowId: uid(), date: r.date || todayISO(), description: r.item || '', amount: Number(r.amount)||0,
     currency: CURRENCIES.includes(r.currency) ? r.currency : 'SGD',
@@ -775,15 +781,16 @@ function openImportPanel(){
 }
 function closeImportPanel(){ document.getElementById('import-panel').style.display = 'none'; importBatches = []; }
 
+const ACCEPTED_STATEMENT_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 function addImportFiles(fileList){
   const files = Array.from(fileList || []);
   const rejected = [];
   files.forEach(f => {
-    if (f.type !== 'application/pdf'){ rejected.push(f.name); return; }
+    if (!ACCEPTED_STATEMENT_MIMES.includes(f.type)){ rejected.push(f.name); return; }
     importBatches.push({ batchId: uid(), file: f, originalFilename: f.name, suggestedName: '', status: 'pending', errorMsg: '', rows: [] });
   });
   renderImportPanel();
-  if (rejected.length) showImportError(`Skipped non-PDF file${rejected.length===1?'':'s'}: ${rejected.join(', ')}`);
+  if (rejected.length) showImportError(`Skipped unsupported file${rejected.length===1?'':'s'} (need PDF or a photo — jpg/png/webp/heic): ${rejected.join(', ')}`);
 }
 function removeImportBatch(batchId){
   importBatches = importBatches.filter(b => b.batchId !== batchId);
@@ -810,20 +817,20 @@ function renderImportPanel(){
   if (!anyDone){
     const hasFiles = importBatches.length > 0;
     el.innerHTML = `
-      <div class="field-label" style="margin-bottom:8px;">Bank statements (PDF — drop one or several at once)</div>
+      <div class="field-label" style="margin-bottom:8px;">Bank statements (PDF or photo — drop one or several at once)</div>
       <div class="import-drop" ondragover="onImportDragOver(event)" ondragleave="onImportDragLeave(event)" ondrop="onImportDrop(event)">
         📄
         <label class="btn-ghost btn-sm import-choose">
-          Choose PDF file${hasFiles?'s':''}
-          <input type="file" accept="application/pdf" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="onImportFilesChosen(this)">
+          Choose file${hasFiles?'s':''}
+          <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="onImportFilesChosen(this)">
         </label>
-        <p class="muted" style="margin:6px 0 0;text-align:center;">Drag files here, or click to choose. The AI reads each statement, suggests a name for it, and drafts one transaction per line — using your existing ledger as its guide — and you review before anything is saved.</p>
+        <p class="muted" style="margin:6px 0 0;text-align:center;">Drag PDFs or photos of a statement here, or click to choose. The AI reads each one, suggests a name for it, and drafts one transaction per line — using your existing ledger as its guide — and you review before anything is saved.</p>
       </div>
       ${hasFiles ? `
         <div class="import-file-list">
           ${importBatches.map(b => `
             <div class="import-file-row">
-              <span class="import-file-status">${b.status==='reading' ? '<span class="spin">↻</span>' : b.status==='error' ? '⚠' : '📄'}</span>
+              <span class="import-file-status">${b.status==='reading' ? '<span class="spin">↻</span>' : b.status==='error' ? '⚠' : (b.file.type.startsWith('image/') ? '🖼' : '📄')}</span>
               <span class="import-file-name">${esc(b.originalFilename)}</span>
               ${b.status==='error' ? `<span class="ai-note-error" style="font-size:12px;">${esc(b.errorMsg)}</span>` : ''}
               <button type="button" class="icon-btn icon-btn-danger" onclick="removeImportBatch('${b.batchId}')">🗑</button>
@@ -878,14 +885,14 @@ async function runImportParse(){
     if (freshBtn){ freshBtn.disabled = true; freshBtn.innerHTML = `<span class="spin">↻</span> Reading ${esc(b.originalFilename)}…`; }
     try {
       const base64 = await fileToBase64(b.file);
-      const { suggestedName, rows } = await parseStatementPdf(base64);
+      const { suggestedName, rows } = await parseStatementPdf(base64, b.file.type);
       b.rows = rows;
-      b.suggestedName = suggestedName || b.originalFilename.replace(/\.pdf$/i, '');
+      b.suggestedName = suggestedName || b.originalFilename.replace(/\.(pdf|jpe?g|png|webp|heic|heif)$/i, '');
       b.status = rows.length === 0 ? 'error' : 'done';
-      if (rows.length === 0) b.errorMsg = 'No transactions found — may be a scanned image or unsupported layout.';
+      if (rows.length === 0) b.errorMsg = 'No transactions found — the image or PDF may be unclear or an unsupported layout.';
     } catch(e){
       b.status = 'error';
-      b.errorMsg = "Couldn't read this statement — check it's a text-based PDF.";
+      b.errorMsg = "Couldn't read this statement — check the file is clear and try again.";
     }
   }
   renderImportPanel();
