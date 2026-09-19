@@ -34,6 +34,22 @@ function isValidISODate(v){
   const d = new Date(v + 'T00:00:00Z');
   return !isNaN(d.getTime()) && d.toISOString().slice(0,10) === v;
 }
+// dd/mm/yy <-> ISO, for the statement review table. The app stores ISO (YYYY-MM-DD) everywhere; this is
+// display/entry only. Two-digit years mean 20yy; anything outside 2000-2099 is shown with four digits.
+function isoToDMY(iso){
+  if (!isValidISODate(iso)) return '';
+  const y = Number(iso.slice(0,4));
+  return iso.slice(8,10) + '/' + iso.slice(5,7) + '/' + ((y >= 2000 && y <= 2099) ? iso.slice(2,4) : iso.slice(0,4));
+}
+function parseDMY(str){
+  const s = String(str == null ? '' : str).trim();
+  if (isValidISODate(s)) return s;                       // also accept a pasted YYYY-MM-DD
+  const m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/);
+  if (!m) return '';
+  const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+  const iso = String(y).padStart(4,'0') + '-' + m[2].padStart(2,'0') + '-' + m[1].padStart(2,'0');
+  return isValidISODate(iso) ? iso : '';
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 /* ======================================================================
@@ -734,7 +750,7 @@ function renderImportRowHtml(r, batchId){
   return `
   <div class="import-row" data-row-id="${row}">
     <input type="checkbox" ${r.selected?'checked':''} data-change="importRowField" data-field="selected" ${ref}>
-    <input type="date" class="mono${dateOk?'':' import-date-missing'}" value="${dateOk ? esc(r.date) : ''}" title="${dateOk ? '' : 'No valid date was read for this line - set one before importing'}" data-change="importRowField" data-field="date" ${ref}>
+    <input type="text" inputmode="numeric" maxlength="10" placeholder="dd/mm/yy" class="mono${dateOk?'':' import-date-missing'}" value="${dateOk ? esc(isoToDMY(r.date)) : ''}" title="${dateOk ? 'dd/mm/yy' : 'No valid date was read for this line - type one as dd/mm/yy before importing'}" data-change="importRowField" data-field="date" ${ref}>
     <input type="text" value="${esc(r.description)}" placeholder="Item" data-input="importRowField" data-field="description" ${ref}>
     <div class="amount-row import-amount">
       <span class="dir-badge ${isIncome?'dir-in':'dir-out'}" title="${isIncome?'Money in':'Money out'}">${isIncome?'+':'−'}</span>
@@ -1067,9 +1083,15 @@ const ACTIONS = Object.assign(Object.create(null), {
   removeImportBatch: (el) => removeImportBatch(el.dataset.batch),
   batchName: (el) => updateBatchName(el.dataset.batch, el.value),
   importRowField: (el) => {
+    if (el.dataset.field === 'date') {
+      const iso = parseDMY(el.value);                     // '' if it isn't a real calendar date
+      updateImportRow(el.dataset.batch, el.dataset.row, 'date', iso);
+      el.classList.toggle('import-date-missing', !iso);
+      if (iso) el.value = isoToDMY(iso);                  // e.g. 5/8/26 -> 05/08/26
+      return;
+    }
     const value = el.type === 'checkbox' ? el.checked : el.value;
     updateImportRow(el.dataset.batch, el.dataset.row, el.dataset.field, value);
-    if (el.dataset.field === 'date') el.classList.toggle('import-date-missing', !isValidISODate(el.value));
   },
   removeImportRow: (el) => removeImportRow(el.dataset.batch, el.dataset.row),
   runImportParse: () => runImportParse(),
