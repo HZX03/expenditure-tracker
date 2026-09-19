@@ -515,8 +515,12 @@ async function callWorker(path, body){
     headers:{'Content-Type':'application/json', 'Authorization': `Bearer ${driveAccessToken}`},
     body: JSON.stringify(body),
   });
-  if (res.status === 403) throw new Error('Not authorized to use this AI backend');
-  if (!res.ok) throw new Error('Worker error ' + res.status);
+  if (!res.ok){
+    let detail = '';
+    try { const errBody = await res.json(); detail = errBody && errBody.error ? errBody.error : ''; } catch(e){}
+    if (res.status === 403) throw new Error(detail || 'Not authorized to use this AI backend');
+    throw new Error(detail || ('Worker error ' + res.status));
+  }
   return res.json();
 }
 async function classifyItem(description, amount, currency){
@@ -892,7 +896,7 @@ async function runImportParse(){
       if (rows.length === 0) b.errorMsg = 'No transactions found — the image or PDF may be unclear or an unsupported layout.';
     } catch(e){
       b.status = 'error';
-      b.errorMsg = "Couldn't read this statement — check the file is clear and try again.";
+      b.errorMsg = (e && e.message) ? e.message : "Couldn't read this statement — check the file is clear and try again.";
     }
   }
   renderImportPanel();
