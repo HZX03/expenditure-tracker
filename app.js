@@ -22,6 +22,11 @@ let state = { transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [
 let tab = 'transactions';
 let txAiMeta = null;      // { confidence, reasoning } for the form currently open
 let txAiSuggested = false;
+let selectedTxIds = new Set();   // rows ticked in the transaction list (always a subset of what is shown)
+let visibleTxIds = [];           // ids currently shown, in on-screen order (used for shift-click ranges)
+let lastSelectedTxId = null;
+let bulkCategory = '';           // category chosen in the bulk bar
+let bulkNotice = '', bulkUndo = null;
 let importBatches = [];   // set of PDFs currently being read/reviewed in the import panel
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -543,6 +548,77 @@ function correctTxCategory(id, newCategory){
   tx.category = newCategory; tx.aiOverridden = !!tx.aiSuggested;
   saveState(); renderTxList();
 }
+/* ---- Bulk category change ----
+   Tick rows (shift-click for a range, or "Select all shown"), pick a category, press Set category. Only rows that are
+   currently shown can be selected, so what you see ticked is exactly what changes. Undo restores the previous
+   categories (skipping any row you have edited since). */
+function syncSelectionUI(){
+  document.querySelectorAll('#tx-list .tx-select').forEach(cb => { cb.checked = selectedTxIds.has(cb.dataset.id); });
+  renderBulkBar();
+}
+function resetBulkNotice(){ bulkNotice = ''; bulkUndo = null; }
+function toggleTxSelection(id, checked, shift){
+  resetBulkNotice();
+  const ids = [id];
+  if (shift && lastSelectedTxId && visibleTxIds.includes(lastSelectedTxId) && visibleTxIds.includes(id)){
+    const a = visibleTxIds.indexOf(lastSelectedTxId), b = visibleTxIds.indexOf(id);
+    ids.length = 0; visibleTxIds.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => ids.push(x));
+    if (window.getSelection) window.getSelection().removeAllRanges();    // shift-click also highlights text; don't
+  }
+  ids.forEach(x => { if (checked) selectedTxIds.add(x); else selectedTxIds.delete(x); });
+  lastSelectedTxId = id;
+  syncSelectionUI();
+}
+function selectAllShown(on){
+  resetBulkNotice();
+  selectedTxIds = on ? new Set(visibleTxIds) : new Set();
+  syncSelectionUI();
+}
+function renderBulkBar(){
+  const bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  const total = visibleTxIds.length, n = selectedTxIds.size;
+  if (total === 0){ bar.className = 'bulk-bar'; bar.innerHTML = ''; return; }
+  bar.className = 'bulk-bar' + (n ? ' bulk-active' : '');
+  bar.innerHTML = `
+    <label class="bulk-all"><input type="checkbox" data-change="txSelectAll" ${n === total ? 'checked' : ''}> Select all ${total} shown</label>
+    ${n ? `
+      <span class="bulk-count">${n} selected</span>
+      <select id="bulk-category" data-change="bulkCategoryChanged" title="Category to give the selected transactions">${categoryOptions(bulkCategory)}</select>
+      <button type="button" class="btn-primary btn-sm" data-click="bulkApply" ${bulkCategory ? '' : 'disabled'}>Set category</button>
+      <button type="button" class="btn-ghost btn-sm" data-click="bulkClear">Clear selection</button>` : ''}
+    ${bulkNotice ? `<span class="bulk-msg">${esc(bulkNotice)}${bulkUndo ? ' <button type="button" class="link-btn" data-click="bulkUndo">Undo</button>' : ''}</span>` : ''}`;
+  bar.querySelector('.bulk-all input').indeterminate = n > 0 && n < total;
+}
+function applyBulkCategory(){
+  const category = bulkCategory;
+  if (!category || selectedTxIds.size === 0) return;
+  const picked = selectedTxIds.size, changes = [];
+  state.transactions.forEach(tx => {
+    if (!selectedTxIds.has(tx.id) || tx.category === category) return;
+    changes.push({ id: tx.id, prevCategory: tx.category, prevOverridden: tx.aiOverridden, newCategory: category });
+    tx.category = category; tx.aiOverridden = !!tx.aiSuggested;        // same rule as changing one row by hand
+  });
+  const same = picked - changes.length;
+  bulkNotice = changes.length
+    ? `${changes.length} changed to \u201C${category}\u201D` + (same ? `, ${same} already had it.` : '.')
+    : `Nothing to change \u2014 all ${picked} already \u201C${category}\u201D.`;
+  bulkUndo = changes.length ? { changes } : null;
+  selectedTxIds = new Set(); bulkCategory = '';
+  if (changes.length) saveState();
+  renderTxList();
+}
+function undoBulkCategory(){
+  if (!bulkUndo) return;
+  let restored = 0;
+  bulkUndo.changes.forEach(c => {
+    const tx = state.transactions.find(t => t.id === c.id);
+    if (tx && tx.category === c.newCategory){ tx.category = c.prevCategory; tx.aiOverridden = c.prevOverridden; restored++; }
+  });
+  bulkUndo = null; bulkNotice = restored ? `Undone \u2014 ${restored} restored.` : 'Nothing to undo.';
+  if (restored) saveState();
+  renderTxList();
+}
 function toggleTxComment(id){
   const row = document.querySelector(`.tx-row[data-id="${CSS.escape(id)}"]`);
   const box = row.querySelector('.tx-comment');
@@ -600,6 +676,10 @@ function renderTxList(){
   const byDate = {};
   filtered.forEach(t => { (byDate[t.date] ||= []).push(t); });
   const dates = Object.keys(byDate).sort().reverse();
+  visibleTxIds = dates.flatMap(d => byDate[d].map(t => t.id));
+  const visible = new Set(visibleTxIds);
+  selectedTxIds.forEach(id => { if (!visible.has(id)) selectedTxIds.delete(id); });   // never act on rows you can't see
+  renderBulkBar();
   const el = document.getElementById('tx-list');
   if (dates.length === 0){
     el.innerHTML = state.transactions.length === 0
@@ -616,6 +696,7 @@ function renderTxRowHtml(tx){
   const aiOn = tx.aiSuggested && !tx.aiOverridden;
   return `
   <div class="tx-row" data-id="${esc(tx.id)}">
+    <input type="checkbox" class="tx-select" data-click="txSelectRow" data-id="${esc(tx.id)}" ${selectedTxIds.has(tx.id) ? 'checked' : ''} aria-label="Select this transaction">
     <div class="tx-date mono">${esc(tx.date)}</div>
     <div class="tx-main">
       <div class="tx-desc">${esc(tx.description)}</div>
@@ -1122,6 +1203,15 @@ const ACTIONS = Object.assign(Object.create(null), {
   },
   toggleTxComment: (el) => toggleTxComment(el.dataset.id),
   editTx: (el) => editTx(el.dataset.id),
+  txSelectRow: (el, ev) => toggleTxSelection(el.dataset.id, el.checked, ev.shiftKey),
+  txSelectAll: (el) => selectAllShown(el.checked),
+  bulkCategoryChanged: (el) => {
+    bulkCategory = (el.value === NEW_CATEGORY_VALUE) ? (promptForNewCategory() || bulkCategory) : el.value;
+    renderBulkBar();
+  },
+  bulkApply: () => applyBulkCategory(),
+  bulkClear: () => selectAllShown(false),
+  bulkUndo: () => undoBulkCategory(),
   deleteTx: (el) => deleteTx(el.dataset.id),
   renderTxList: () => renderTxList(),
   clearTxFilters: () => clearTxFilters(),
