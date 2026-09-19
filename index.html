@@ -108,8 +108,17 @@ a { color: var(--teal); }
 .chip-ok { background: var(--teal-soft); color: var(--teal); border: 1px solid var(--teal); }
 .chip-btn { background: none; border: none; padding: 0; }
 
-.import-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; border: 1.5px dashed var(--rule); border-radius: 8px; padding: 26px 16px; color: var(--ink-soft); background: var(--paper); }
+.import-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; border: 1.5px dashed var(--rule); border-radius: 8px; padding: 26px 16px; color: var(--ink-soft); background: var(--paper); transition: border-color .15s, background .15s; }
+.import-drop-active { border-color: var(--teal); background: var(--teal-soft); }
 .import-choose { position: relative; cursor: pointer; }
+.import-file-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.import-file-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 2px; }
+.import-file-name { flex: 1; }
+.import-file-status { width: 16px; text-align: center; }
+.import-batch { margin-bottom: 14px; }
+.import-batch-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.import-batch-name { flex: 1; min-width: 200px; font-weight: 600; border-color: var(--gold); background: var(--gold-soft); }
+.import-batch-error { color: var(--rust); font-size: 13px; }
 .import-review-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; margin-bottom: 12px; }
 .import-rows { display: flex; flex-direction: column; gap: 8px; max-height: 440px; overflow-y: auto; }
 .import-row { display: grid; grid-template-columns: 18px 128px 1fr 150px 150px 44px auto; gap: 8px; align-items: center; }
@@ -344,7 +353,7 @@ let state = { transactions: [], categories: DEFAULT_CATEGORIES.slice(), loans: [
 let tab = 'transactions';
 let txAiMeta = null;      // { confidence, reasoning } for the form currently open
 let txAiSuggested = false;
-let importRows = null;    // draft rows from a parsed statement, or null
+let importBatches = [];   // set of PDFs currently being read/reviewed in the import panel
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
@@ -509,12 +518,13 @@ async function classifyItem(description, amount, currency){
 }
 async function parseStatementPdf(base64){
   const result = await callWorker('/parse-statement', { pdfBase64: base64, categories: state.categories, history: recentHistory() });
-  return (result.transactions || []).map(r => ({
+  const rows = (result.transactions || []).map(r => ({
     rowId: uid(), date: r.date || todayISO(), description: r.item || '', amount: Number(r.amount)||0,
     currency: CURRENCIES.includes(r.currency) ? r.currency : 'SGD',
     category: state.categories.includes(r.category) ? r.category : 'Other',
     confidence: typeof r.confidence === 'number' ? r.confidence : null, selected: true,
   }));
+  return { suggestedName: (result.suggestedName || '').trim(), rows };
 }
 function fileToBase64(file){
   return new Promise((resolve, reject) => {
@@ -754,114 +764,187 @@ function startCatEdit(id){
 }
 function editTx(id){ const tx = state.transactions.find(t => t.id === id); if (tx) openTxForm(tx); }
 
-/* ---- Bank statement import ---- */
+/* ---- Bank statement import (multi-file, drag & drop, AI-named) ---- */
 function openImportPanel(){
   closeTxForm();
-  importRows = null;
+  importBatches = [];
   const el = document.getElementById('import-panel');
   el.style.display = 'block';
   renderImportPanel();
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
-function closeImportPanel(){ document.getElementById('import-panel').style.display = 'none'; importRows = null; }
+function closeImportPanel(){ document.getElementById('import-panel').style.display = 'none'; importBatches = []; }
+
+function addImportFiles(fileList){
+  const files = Array.from(fileList || []);
+  const rejected = [];
+  files.forEach(f => {
+    if (f.type !== 'application/pdf'){ rejected.push(f.name); return; }
+    importBatches.push({ batchId: uid(), file: f, originalFilename: f.name, suggestedName: '', status: 'pending', errorMsg: '', rows: [] });
+  });
+  renderImportPanel();
+  if (rejected.length) showImportError(`Skipped non-PDF file${rejected.length===1?'':'s'}: ${rejected.join(', ')}`);
+}
+function removeImportBatch(batchId){
+  importBatches = importBatches.filter(b => b.batchId !== batchId);
+  renderImportPanel();
+}
+function onImportFilesChosen(input){ addImportFiles(input.files); }
+function onImportDrop(ev){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('import-drop-active');
+  addImportFiles(ev.dataTransfer.files);
+}
+function onImportDragOver(ev){ ev.preventDefault(); ev.currentTarget.classList.add('import-drop-active'); }
+function onImportDragLeave(ev){ ev.currentTarget.classList.remove('import-drop-active'); }
+
+function showImportError(msg){
+  const el = document.getElementById('import-error');
+  if (!el) return;
+  el.style.display = 'block'; el.textContent = '⚠ ' + msg;
+}
 
 function renderImportPanel(){
   const el = document.getElementById('import-panel');
-  if (!importRows){
+  const anyDone = importBatches.some(b => b.status === 'done' && b.rows.length > 0);
+  if (!anyDone){
+    const hasFiles = importBatches.length > 0;
     el.innerHTML = `
-      <div class="field-label" style="margin-bottom:8px;">Bank statement (PDF)</div>
-      <div class="import-drop">
+      <div class="field-label" style="margin-bottom:8px;">Bank statements (PDF — drop one or several at once)</div>
+      <div class="import-drop" ondragover="onImportDragOver(event)" ondragleave="onImportDragLeave(event)" ondrop="onImportDrop(event)">
         📄
         <label class="btn-ghost btn-sm import-choose">
-          <span id="import-filename">Choose PDF file</span>
-          <input type="file" accept="application/pdf" style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="onImportFileChosen(this)">
+          Choose PDF file${hasFiles?'s':''}
+          <input type="file" accept="application/pdf" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer;" onchange="onImportFilesChosen(this)">
         </label>
-        <p class="muted" style="margin:6px 0 0;text-align:center;">The AI reads the statement and drafts one transaction per line — using your existing ledger as its guide — and you review before anything is saved.</p>
+        <p class="muted" style="margin:6px 0 0;text-align:center;">Drag files here, or click to choose. The AI reads each statement, suggests a name for it, and drafts one transaction per line — using your existing ledger as its guide — and you review before anything is saved.</p>
       </div>
+      ${hasFiles ? `
+        <div class="import-file-list">
+          ${importBatches.map(b => `
+            <div class="import-file-row">
+              <span class="import-file-status">${b.status==='reading' ? '<span class="spin">↻</span>' : b.status==='error' ? '⚠' : '📄'}</span>
+              <span class="import-file-name">${esc(b.originalFilename)}</span>
+              ${b.status==='error' ? `<span class="ai-note-error" style="font-size:12px;">${esc(b.errorMsg)}</span>` : ''}
+              <button type="button" class="icon-btn icon-btn-danger" onclick="removeImportBatch('${b.batchId}')">🗑</button>
+            </div>`).join('')}
+        </div>` : ''}
       <p class="ai-note ai-note-error" id="import-error" style="display:none;"></p>
       <div class="form-actions">
         <button type="button" class="btn-ghost" onclick="closeImportPanel()">Cancel</button>
-        <button type="button" class="btn-primary" id="import-read-btn" onclick="runImportParse()" disabled>✨ Read statement</button>
+        <button type="button" class="btn-primary" id="import-read-btn" onclick="runImportParse()" ${hasFiles?'':'disabled'}>✨ Read statement${importBatches.length===1?'':'s'}</button>
       </div>`;
   } else {
+    const totalRows = importBatches.reduce((s,b) => s + b.rows.length, 0);
     el.innerHTML = `
-      <div class="import-review-head">📄 <span>${importRows.length} transaction${importRows.length===1?'':'s'} found — review before importing</span></div>
-      <div class="import-rows" id="import-rows-container">${importRows.map(renderImportRowHtml).join('')}</div>
+      <div class="import-review-head">📄 <span>${totalRows} transaction${totalRows===1?'':'s'} found across ${importBatches.length} statement${importBatches.length===1?'':'s'} — review before importing</span></div>
+      ${importBatches.map(renderImportBatchHtml).join('')}
       <div class="form-actions">
         <button type="button" class="btn-ghost" onclick="closeImportPanel()">Cancel</button>
-        <button type="button" class="btn-primary" onclick="commitImport()">Import <span id="import-count">${importRows.filter(r=>r.selected).length}</span> transactions</button>
+        <button type="button" class="btn-primary" onclick="commitImport()">Import <span id="import-count">${countSelectedImportRows()}</span> transactions</button>
       </div>`;
   }
 }
-let importFile = null;
-function onImportFileChosen(input){
-  const f = input.files[0];
-  if (!f) return;
-  if (f.type !== 'application/pdf'){ showImportError('Please choose a PDF file.'); return; }
-  importFile = f;
-  document.getElementById('import-filename').textContent = f.name;
-  document.getElementById('import-read-btn').disabled = false;
-  document.getElementById('import-error').style.display = 'none';
+function countSelectedImportRows(){
+  return importBatches.reduce((s,b) => s + b.rows.filter(r=>r.selected).length, 0);
 }
-function showImportError(msg){
-  const el = document.getElementById('import-error');
-  el.style.display = 'block'; el.textContent = '⚠ ' + msg;
-}
-async function runImportParse(){
-  if (!importFile) return;
-  const btn = document.getElementById('import-read-btn');
-  btn.disabled = true; btn.innerHTML = '<span class="spin">↻</span> Reading statement…';
-  try {
-    const base64 = await fileToBase64(importFile);
-    const rows = await parseStatementPdf(base64);
-    if (rows.length === 0){ showImportError("No transactions were found in that PDF — it may be a scanned image or an unsupported layout."); btn.disabled = false; btn.innerHTML = '✨ Read statement'; return; }
-    importRows = rows;
-    renderImportPanel();
-  } catch(e){
-    showImportError("Couldn't read that statement. Double-check it's a text-based PDF and try again.");
-    btn.disabled = false; btn.innerHTML = '✨ Read statement';
+function renderImportBatchHtml(b){
+  if (b.status === 'error'){
+    return `<div class="panel-card import-batch-error"><strong>${esc(b.originalFilename)}</strong> — ${esc(b.errorMsg)}</div>`;
   }
-}
-function renderImportRowHtml(r){
+  if (b.rows.length === 0) return '';
   return `
-  <div class="import-row" data-row-id="${r.rowId}">
-    <input type="checkbox" ${r.selected?'checked':''} onchange="updateImportRow('${r.rowId}','selected',this.checked)">
-    <input type="date" class="mono" value="${r.date}" onchange="updateImportRow('${r.rowId}','date',this.value)">
-    <input type="text" value="${esc(r.description)}" placeholder="Item" oninput="updateImportRow('${r.rowId}','description',this.value)">
-    <div class="amount-row import-amount">
-      <select onchange="updateImportRow('${r.rowId}','currency',this.value)">${CURRENCIES.map(c=>`<option value="${c}" ${c===r.currency?'selected':''}>${c}</option>`).join('')}</select>
-      <input type="number" step="0.01" value="${r.amount}" oninput="updateImportRow('${r.rowId}','amount',this.value)">
+  <div class="import-batch">
+    <div class="import-batch-header">
+      <input type="text" class="import-batch-name" value="${esc(b.suggestedName || b.originalFilename)}" oninput="updateBatchName('${b.batchId}', this.value)" title="AI-suggested name — edit if you like">
+      <span class="muted">${b.rows.length} transaction${b.rows.length===1?'':'s'} · from ${esc(b.originalFilename)}</span>
     </div>
-    <select onchange="updateImportRow('${r.rowId}','category',this.value)">${categoryOptions(r.category)}</select>
-    ${r.confidence!=null ? `<span class="chip chip-ai import-conf">${r.confidence}%</span>` : '<span></span>'}
-    <button type="button" class="icon-btn icon-btn-danger" onclick="removeImportRow('${r.rowId}')">🗑</button>
+    <div class="import-rows">${b.rows.map(r => renderImportRowHtml(r, b.batchId)).join('')}</div>
   </div>`;
 }
-function updateImportRow(rowId, field, value){
-  const row = importRows.find(r => r.rowId === rowId);
-  if (!row) return;
-  row[field] = field === 'selected' ? value : value;
-  if (field === 'selected') document.getElementById('import-count').textContent = importRows.filter(r=>r.selected).length;
+function updateBatchName(batchId, value){
+  const b = importBatches.find(x => x.batchId === batchId);
+  if (b) b.suggestedName = value;
 }
-function removeImportRow(rowId){
-  importRows = importRows.filter(r => r.rowId !== rowId);
+async function runImportParse(){
+  const pending = importBatches.filter(b => b.status === 'pending');
+  if (pending.length === 0) return;
+  const btn = document.getElementById('import-read-btn');
+  btn.disabled = true;
+  for (const b of pending){
+    b.status = 'reading';
+    renderImportPanel();
+    const freshBtn = document.getElementById('import-read-btn');
+    if (freshBtn){ freshBtn.disabled = true; freshBtn.innerHTML = `<span class="spin">↻</span> Reading ${esc(b.originalFilename)}…`; }
+    try {
+      const base64 = await fileToBase64(b.file);
+      const { suggestedName, rows } = await parseStatementPdf(base64);
+      b.rows = rows;
+      b.suggestedName = suggestedName || b.originalFilename.replace(/\.pdf$/i, '');
+      b.status = rows.length === 0 ? 'error' : 'done';
+      if (rows.length === 0) b.errorMsg = 'No transactions found — may be a scanned image or unsupported layout.';
+    } catch(e){
+      b.status = 'error';
+      b.errorMsg = "Couldn't read this statement — check it's a text-based PDF.";
+    }
+  }
+  renderImportPanel();
+}
+function renderImportRowHtml(r, batchId){
+  return `
+  <div class="import-row" data-row-id="${r.rowId}">
+    <input type="checkbox" ${r.selected?'checked':''} onchange="updateImportRow('${batchId}','${r.rowId}','selected',this.checked)">
+    <input type="date" class="mono" value="${r.date}" onchange="updateImportRow('${batchId}','${r.rowId}','date',this.value)">
+    <input type="text" value="${esc(r.description)}" placeholder="Item" oninput="updateImportRow('${batchId}','${r.rowId}','description',this.value)">
+    <div class="amount-row import-amount">
+      <select onchange="updateImportRow('${batchId}','${r.rowId}','currency',this.value)">${CURRENCIES.map(c=>`<option value="${c}" ${c===r.currency?'selected':''}>${c}</option>`).join('')}</select>
+      <input type="number" step="0.01" value="${r.amount}" oninput="updateImportRow('${batchId}','${r.rowId}','amount',this.value)">
+    </div>
+    <select onchange="updateImportRow('${batchId}','${r.rowId}','category',this.value)">${categoryOptions(r.category)}</select>
+    ${r.confidence!=null ? `<span class="chip chip-ai import-conf">${r.confidence}%</span>` : '<span></span>'}
+    <button type="button" class="icon-btn icon-btn-danger" onclick="removeImportRow('${batchId}','${r.rowId}')">🗑</button>
+  </div>`;
+}
+function updateImportRow(batchId, rowId, field, value){
+  const b = importBatches.find(x => x.batchId === batchId);
+  const row = b && b.rows.find(r => r.rowId === rowId);
+  if (!row) return;
+  row[field] = value;
+  if (field === 'selected'){
+    const countEl = document.getElementById('import-count');
+    if (countEl) countEl.textContent = countSelectedImportRows();
+  }
+}
+function removeImportRow(batchId, rowId){
+  const b = importBatches.find(x => x.batchId === batchId);
+  if (!b) return;
+  b.rows = b.rows.filter(r => r.rowId !== rowId);
   renderImportPanel();
 }
 function commitImport(){
-  const toImport = importRows.filter(r => r.selected && r.description.trim() && Number(r.amount));
-  if (toImport.length === 0){ closeImportPanel(); return; }
-  const importId = uid();
-  const newTxs = toImport.map(r => ({
-    id: uid(), date: r.date, description: r.description.trim(), amount: Number(r.amount), currency: r.currency,
-    category: r.category, secondary: '', comment: '',
-    aiSuggested: true, aiConfidence: r.confidence, aiReasoning: 'Extracted from imported bank statement.', aiOverridden: false,
-    importId,
-  }));
-  state.transactions = newTxs.concat(state.transactions);
-  state.imports.unshift({
-    id: importId, filename: importFile ? importFile.name : 'statement.pdf',
-    importedAt: new Date().toISOString(), count: newTxs.length, txIds: newTxs.map(t => t.id),
+  const newTxs = [];
+  const newImportRecords = [];
+  importBatches.forEach(b => {
+    const toImport = b.rows.filter(r => r.selected && r.description.trim() && Number(r.amount));
+    if (toImport.length === 0) return;
+    const importId = uid();
+    const txs = toImport.map(r => ({
+      id: uid(), date: r.date, description: r.description.trim(), amount: Number(r.amount), currency: r.currency,
+      category: r.category, secondary: '', comment: '',
+      aiSuggested: true, aiConfidence: r.confidence, aiReasoning: 'Extracted from imported bank statement.', aiOverridden: false,
+      importId,
+    }));
+    newTxs.push(...txs);
+    newImportRecords.push({
+      id: importId,
+      filename: (b.suggestedName || b.originalFilename).trim() || b.originalFilename,
+      originalFilename: b.originalFilename,
+      importedAt: new Date().toISOString(), count: txs.length, txIds: txs.map(t => t.id),
+    });
   });
+  if (newTxs.length === 0){ closeImportPanel(); return; }
+  state.transactions = newTxs.concat(state.transactions);
+  state.imports = newImportRecords.concat(state.imports);
   closeImportPanel(); saveState(); renderTxSummary(); renderTxList();
 }
 
