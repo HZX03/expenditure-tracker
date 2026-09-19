@@ -613,13 +613,43 @@ function redactPii(text){
   out = out.replace(/\b\d{6,}\b/g, '[REDACTED]');
   return out;
 }
+// Some PDFs embed decorative or barcode/QR "fonts" (common in the footer of
+// bank statements) that pdf.js reads as garbled, sometimes invalid Unicode
+// (stray symbols, lone surrogate halves) rather than real text. Left in,
+// that can make the outbound request to Gemini fail outright. This strips
+// control characters and any unpaired surrogate code units before the text
+// goes anywhere.
+function sanitizeExtractedText(text){
+  let out = text
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+  // Decorative/barcode fonts (common in statement footers, e.g. next to a
+  // QR code) render as long runs of near-gibberish when read as "text" by
+  // pdf.js. Real prose has a fairly consistent vowel density; this garbage
+  // doesn't. Drop any line over 15 characters where vowels make up less
+  // than 8% of the line — comfortably below normal English text, even
+  // dense transaction lines full of numbers and codes, but well above what
+  // font-rendering noise produces.
+  out = out.split('\n').filter(line => {
+    if (line.length <= 15) return true;
+    const vowels = (line.match(/[aeiouAEIOU]/g) || []).length;
+    return vowels / line.length >= 0.10;
+  }).join('\n');
+  return out;
+}
 // Tries the redact-and-send-text path; falls back to sending the original
 // PDF whole if extraction fails or the PDF turns out to have no real text
 // layer (e.g. a scanned statement saved as PDF).
 async function extractAndRedactPdf(file){
   try {
-    const text = await extractPdfText(file);
+    let text = await extractPdfText(file);
+    text = sanitizeExtractedText(text);
     if (text.trim().length < 200) throw new Error('Too little text extracted — likely a scanned PDF');
+    // Generous cap — a normal multi-page statement is nowhere near this;
+    // this only guards against something like a barcode font blowing the
+    // extracted text up with repeated junk.
+    if (text.length > 200000) text = text.slice(0, 200000);
     return { text: redactPii(text) };
   } catch (e){
     const base64 = await fileToBase64(file);
