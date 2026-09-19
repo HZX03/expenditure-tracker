@@ -399,8 +399,52 @@ function populateStaticSelects(){
   const breakdownCur = document.getElementById('breakdown-currency');
   breakdownCur.innerHTML = CURRENCIES.map(c => `<option value="${c}">${c}</option>`).join('');
 }
+/* ---- Creating new categories ----
+   Every category dropdown ends with "+ New category…". Picking it asks for a name (promptForNewCategory),
+   adds it to state.categories (saved to Drive with the rest of the ledger), and selects it. The AI sees the
+   new category straight away because every AI call already sends state.categories. */
+const NEW_CATEGORY_VALUE = '__new_category__';   // value of the "+ New category…" option; never accepted as a real name
+const MAX_CATEGORY_LENGTH = 40;
 function categoryOptions(selected){
-  return '<option value="">Select…</option>' + state.categories.map(c => `<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('');
+  return '<option value="">Select…</option>' + state.categories.map(c => `<option value="${esc(c)}" ${c===selected?'selected':''}>${esc(c)}</option>`).join('')
+    + `<option value="${NEW_CATEGORY_VALUE}">+ New category…</option>`;
+}
+function cleanCategoryName(raw){
+  return String(raw == null ? '' : raw).replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function refreshCategoryFilter(){
+  const el = document.getElementById('tx-filter-cat');
+  if (!el) return;
+  const current = el.value;
+  el.innerHTML = '<option value="">All categories</option>' + state.categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  el.value = current;
+}
+// Returns the category to use, or null if the person cancelled / gave nothing usable. A name that matches an
+// existing category (ignoring case) reuses that one rather than creating a near-duplicate. New ones are placed
+// just before "Other" so "Other" stays last.
+function promptForNewCategory(){
+  const raw = prompt(`Name for the new category (max ${MAX_CATEGORY_LENGTH} characters):`);
+  if (raw === null) return null;
+  const name = cleanCategoryName(raw);
+  if (!name || name === NEW_CATEGORY_VALUE) return null;
+  if (name.length > MAX_CATEGORY_LENGTH){ alert(`Category names can be at most ${MAX_CATEGORY_LENGTH} characters — that one is ${name.length}.`); return null; }
+  const existing = state.categories.find(c => c.toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  const otherAt = state.categories.indexOf('Other');
+  if (otherAt >= 0) state.categories.splice(otherAt, 0, name); else state.categories.push(name);
+  saveState();
+  refreshCategoryFilter();
+  return name;
+}
+// Import review: add the new option to every row's dropdown in place (a full re-render would reset scroll and
+// any half-typed edits). Built with DOM calls, not HTML strings.
+function addCategoryOptionToReviewSelects(name){
+  document.querySelectorAll('#import-panel select[data-field="category"]').forEach(sel => {
+    if (Array.from(sel.options).some(o => o.value === name)) return;
+    const opt = document.createElement('option'); opt.value = name; opt.textContent = name;
+    const marker = Array.from(sel.options).find(o => o.value === NEW_CATEGORY_VALUE);
+    sel.insertBefore(opt, marker || null);
+  });
 }
 
 /* ======================================================================
@@ -438,7 +482,7 @@ function renderTxCatPicker(selected){
 function editTxCatPicker(){
   const el = document.getElementById('tx-cat-picker');
   const current = document.getElementById('tx-category').value;
-  el.innerHTML = `<select id="tx-category" autofocus data-change="onTxCatPicked" data-blur="onTxCatPicked">${categoryOptions(current)}</select>`;
+  el.innerHTML = `<select id="tx-category" autofocus data-change="onTxCatPicked" data-blur="onTxCatPicked" data-prev="${esc(current)}">${categoryOptions(current)}</select>`;
   document.getElementById('tx-category').focus();
 }
 function onTxCatPicked(val){ txAiSuggested = false; renderTxCatPicker(val); }
@@ -1064,9 +1108,18 @@ const ACTIONS = Object.assign(Object.create(null), {
   onTxItemChanged: () => onTxItemChanged(),
   suggestTxCategory: () => suggestTxCategory(),
   editTxCatPicker: () => editTxCatPicker(),
-  onTxCatPicked: (el) => onTxCatPicked(el.value),
+  onTxCatPicked: (el) => {
+    if (el.value === NEW_CATEGORY_VALUE) onTxCatPicked(promptForNewCategory() || el.dataset.prev || '');
+    else onTxCatPicked(el.value);
+  },
   startCatEdit: (el) => startCatEdit(el.dataset.id),
-  correctTxCategory: (el) => correctTxCategory(el.dataset.id, el.value),
+  correctTxCategory: (el) => {
+    if (el.value === NEW_CATEGORY_VALUE) {
+      const name = promptForNewCategory();
+      if (name) correctTxCategory(el.dataset.id, name);
+      renderTxList();                                    // closes the dropdown whether or not anything changed
+    } else correctTxCategory(el.dataset.id, el.value);
+  },
   toggleTxComment: (el) => toggleTxComment(el.dataset.id),
   editTx: (el) => editTx(el.dataset.id),
   deleteTx: (el) => deleteTx(el.dataset.id),
@@ -1088,6 +1141,19 @@ const ACTIONS = Object.assign(Object.create(null), {
       updateImportRow(el.dataset.batch, el.dataset.row, 'date', iso);
       el.classList.toggle('import-date-missing', !iso);
       if (iso) el.value = isoToDMY(iso);                  // e.g. 5/8/26 -> 05/08/26
+      return;
+    }
+    if (el.dataset.field === 'category' && el.value === NEW_CATEGORY_VALUE) {
+      const b = importBatches.find(x => x.batchId === el.dataset.batch);
+      const row = b && b.rows.find(r => r.rowId === el.dataset.row);
+      const name = promptForNewCategory();
+      if (name) {
+        addCategoryOptionToReviewSelects(name);
+        el.value = name;
+        updateImportRow(el.dataset.batch, el.dataset.row, 'category', name);
+      } else {
+        el.value = row ? (row.category || '') : '';      // cancelled: put back what it was
+      }
       return;
     }
     const value = el.type === 'checkbox' ? el.checked : el.value;
