@@ -68,6 +68,7 @@ a { color: var(--teal); }
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
 .toolbar-left { flex: 1; min-width: 160px; }
 .toolbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+.toolbar-right select { width: auto; }
 
 .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
 .filter-bar select, .filter-bar input[type="text"] { width: auto; min-width: 130px; }
@@ -78,16 +79,28 @@ a { color: var(--teal); }
 .import-log-name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
 .import-log-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
-.breakdown-row { display: grid; grid-template-columns: 150px 1fr 90px 50px; align-items: center; gap: 10px; padding: 6px 0; }
+.breakdown-row { display: grid; grid-template-columns: 150px 1fr 120px; align-items: center; gap: 10px; padding: 6px 0; }
 .breakdown-label { font-size: 13px; }
-.breakdown-bar-track { background: var(--paper); border-radius: 4px; height: 10px; overflow: hidden; }
-.breakdown-bar { background: var(--gold); height: 100%; border-radius: 4px; }
-.breakdown-bar-month { background: var(--teal); }
-.breakdown-val { font-size: 12.5px; text-align: right; }
-.breakdown-pct { font-size: 12px; color: var(--ink-soft); text-align: right; }
+.breakdown-bar-track { background: var(--paper); border-radius: 4px; height: 10px; overflow: hidden; position: relative; }
+.breakdown-bar { background: var(--gold); position: absolute; top: 0; height: 100%; border-radius: 4px; }
+.bd-out { background: var(--rust); }
+.bd-in { background: var(--teal); }
+.bd-zero { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink-soft); opacity: .55; }
+.breakdown-val.neg { color: var(--rust); }
+.breakdown-val.pos { color: var(--teal); }
+.bd-matrix-wrap { overflow-x: auto; }
+.bd-matrix { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }
+.bd-matrix th, .bd-matrix td { padding: 6px 10px; text-align: right; white-space: nowrap; border-bottom: 1px dashed var(--rule); }
+.bd-matrix th { font-size: 11px; letter-spacing: .04em; color: var(--ink-soft); font-weight: 700; background: var(--paper-raised); }
+.bd-matrix th:first-child, .bd-matrix td:first-child { text-align: left; position: sticky; left: 0; z-index: 1; background: var(--paper-raised); font-family: 'Inter', sans-serif; }
+.bd-matrix td.neg { color: var(--rust); }
+.bd-matrix td.pos { color: var(--teal); }
+.bd-matrix td.bd-empty { color: var(--rule); text-align: center; }
+.bd-matrix .bd-total { font-weight: 600; border-left: 1px solid var(--rule); }
+.bd-matrix tfoot td { font-weight: 600; border-top: 2px solid var(--rule); border-bottom: none; }
+.breakdown-val { font-size: 12.5px; text-align: right; white-space: nowrap; }
 @media (max-width: 640px) {
-  .breakdown-row { grid-template-columns: 100px 1fr 70px; }
-  .breakdown-pct { display: none; }
+  .breakdown-row { grid-template-columns: 88px 1fr 112px; }
 }
 
 .btn-primary { display: inline-flex; align-items: center; gap: 6px; background: var(--ink); color: var(--paper-raised); border: none; padding: 9px 16px; border-radius: 7px; font-weight: 600; font-size: 13.5px; }
@@ -147,6 +160,8 @@ a { color: var(--teal); }
 .bulk-all { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
 .bulk-all input { width: 16px; height: 16px; padding: 0; margin: 0; }
 .bulk-bar select { width: auto; min-width: 180px; }
+.bulk-group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bulk-bar input[type="text"] { width: 210px; }
 .bulk-count { font-weight: 600; font-size: 13px; }
 .bulk-msg { font-size: 12.5px; color: var(--teal); }
 .tx-date { font-size: 12px; color: var(--ink-soft); }
@@ -344,8 +359,8 @@ a { color: var(--teal); }
   <!-- ============================= BREAKDOWN ============================= -->
   <div class="view" id="view-breakdown">
     <div class="toolbar">
-      <div class="toolbar-left"><span class="muted">Spend by category and by month. Loans and FX aren't included.</span></div>
-      <div class="toolbar-right"><select id="breakdown-currency" data-change="renderBreakdown"></select></div>
+      <div class="toolbar-left"><span class="muted">Net = money in + money out, so refunds and income offset spending. Loans and FX aren't included.</span></div>
+      <div class="toolbar-right"><select id="breakdown-month" data-change="renderBreakdown" title="Limit the totals and the category chart to one month"></select><select id="breakdown-currency" data-change="renderBreakdown"></select></div>
     </div>
     <div id="breakdown-content"></div>
   </div>

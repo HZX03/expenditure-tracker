@@ -26,7 +26,8 @@ let selectedTxIds = new Set();   // rows ticked in the transaction list (always 
 let visibleTxIds = [];           // ids currently shown, in on-screen order (used for shift-click ranges)
 let lastSelectedTxId = null;
 let bulkCategory = '';           // category chosen in the bulk bar
-let bulkNotice = '', bulkUndo = null;
+let bulkSecondary = '';           // text typed in the bulk bar's secondary-category box
+let bulkNotice = '', bulkUndo = null;   // bulkUndo = { undo() -> number restored } for the last bulk action
 let importBatches = [];   // set of PDFs currently being read/reviewed in the import panel
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -574,6 +575,10 @@ function selectAllShown(on){
   selectedTxIds = on ? new Set(visibleTxIds) : new Set();
   syncSelectionUI();
 }
+const MAX_SECONDARY_LENGTH = 60;
+function existingSecondaryTags(){
+  return [...new Set(state.transactions.map(t => String(t.secondary || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
 function renderBulkBar(){
   const bar = document.getElementById('bulk-bar');
   if (!bar) return;
@@ -584,12 +589,22 @@ function renderBulkBar(){
     <label class="bulk-all"><input type="checkbox" data-change="txSelectAll" ${n === total ? 'checked' : ''}> Select all ${total} shown</label>
     ${n ? `
       <span class="bulk-count">${n} selected</span>
-      <select id="bulk-category" data-change="bulkCategoryChanged" title="Category to give the selected transactions">${categoryOptions(bulkCategory)}</select>
-      <button type="button" class="btn-primary btn-sm" data-click="bulkApply" ${bulkCategory ? '' : 'disabled'}>Set category</button>
+      <span class="bulk-group">
+        <select id="bulk-category" data-change="bulkCategoryChanged" title="Category to give the selected transactions">${categoryOptions(bulkCategory)}</select>
+        <button type="button" class="btn-primary btn-sm" data-click="bulkApply" ${bulkCategory ? '' : 'disabled'}>Set category</button>
+      </span>
+      <span class="bulk-group">
+        <input type="text" id="bulk-secondary" list="bulk-secondary-list" maxlength="${MAX_SECONDARY_LENGTH}" placeholder="Secondary category…" value="${esc(bulkSecondary)}" data-input="bulkSecondaryInput" data-keydown="bulkSecondaryKey" title="Secondary category to give the selected transactions (e.g. Spain Holiday)">
+        <datalist id="bulk-secondary-list">${existingSecondaryTags().map(t => `<option value="${esc(t)}"></option>`).join('')}</datalist>
+        <button type="button" class="btn-primary btn-sm" data-click="bulkSetSecondary" ${cleanCategoryName(bulkSecondary) ? '' : 'disabled'}>Set secondary</button>
+        <button type="button" class="btn-ghost btn-sm" data-click="bulkClearSecondary" title="Remove the secondary category from the selected transactions">Clear secondary</button>
+      </span>
       <button type="button" class="btn-ghost btn-sm" data-click="bulkClear">Clear selection</button>` : ''}
     ${bulkNotice ? `<span class="bulk-msg">${esc(bulkNotice)}${bulkUndo ? ' <button type="button" class="link-btn" data-click="bulkUndo">Undo</button>' : ''}</span>` : ''}`;
   bar.querySelector('.bulk-all input').indeterminate = n > 0 && n < total;
 }
+// The selection stays ticked after applying, so you can set a category and then a secondary category (or the
+// other way round) on the same rows. Undo reverses only the most recent bulk action.
 function applyBulkCategory(){
   const category = bulkCategory;
   if (!category || selectedTxIds.size === 0) return;
@@ -603,18 +618,54 @@ function applyBulkCategory(){
   bulkNotice = changes.length
     ? `${changes.length} changed to \u201C${category}\u201D` + (same ? `, ${same} already had it.` : '.')
     : `Nothing to change \u2014 all ${picked} already \u201C${category}\u201D.`;
-  bulkUndo = changes.length ? { changes } : null;
-  selectedTxIds = new Set(); bulkCategory = '';
+  bulkUndo = changes.length ? { undo: () => {
+    let restored = 0;
+    changes.forEach(c => {
+      const tx = state.transactions.find(t => t.id === c.id);
+      if (tx && tx.category === c.newCategory){ tx.category = c.prevCategory; tx.aiOverridden = c.prevOverridden; restored++; }   // skip rows edited since
+    });
+    return restored;
+  } } : null;
+  bulkCategory = '';
   if (changes.length) saveState();
   renderTxList();
 }
-function undoBulkCategory(){
-  if (!bulkUndo) return;
-  let restored = 0;
-  bulkUndo.changes.forEach(c => {
-    const tx = state.transactions.find(t => t.id === c.id);
-    if (tx && tx.category === c.newCategory){ tx.category = c.prevCategory; tx.aiOverridden = c.prevOverridden; restored++; }
+function applyBulkSecondary(clear){
+  if (selectedTxIds.size === 0) return;
+  let value = '';
+  if (!clear){
+    value = cleanCategoryName(bulkSecondary);
+    if (!value) return;
+    if (value.length > MAX_SECONDARY_LENGTH){ alert(`Secondary categories can be at most ${MAX_SECONDARY_LENGTH} characters \u2014 that one is ${value.length}.`); return; }
+    value = existingSecondaryTags().find(t => t.toLowerCase() === value.toLowerCase()) || value;   // reuse an existing spelling
+  }
+  const picked = selectedTxIds.size, changes = [];
+  state.transactions.forEach(tx => {
+    if (!selectedTxIds.has(tx.id)) return;
+    const prev = tx.secondary || '';
+    if (prev === value) return;
+    changes.push({ id: tx.id, prev, next: value });
+    tx.secondary = value;
   });
+  const same = picked - changes.length;
+  bulkNotice = changes.length
+    ? (clear ? `${changes.length} cleared.` : `${changes.length} set to \u201C${value}\u201D` + (same ? `, ${same} already had it.` : '.'))
+    : (clear ? `Nothing to clear \u2014 none of the ${picked} had a secondary category.` : `Nothing to change \u2014 all ${picked} already \u201C${value}\u201D.`);
+  bulkUndo = changes.length ? { undo: () => {
+    let restored = 0;
+    changes.forEach(c => {
+      const tx = state.transactions.find(t => t.id === c.id);
+      if (tx && (tx.secondary || '') === c.next){ tx.secondary = c.prev; restored++; }
+    });
+    return restored;
+  } } : null;
+  bulkSecondary = '';
+  if (changes.length) saveState();
+  renderTxList();
+}
+function undoBulk(){
+  if (!bulkUndo) return;
+  const restored = bulkUndo.undo();
   bulkUndo = null; bulkNotice = restored ? `Undone \u2014 ${restored} restored.` : 'Nothing to undo.';
   if (restored) saveState();
   renderTxList();
@@ -632,7 +683,7 @@ function renderTxSummary(){
   const entries = Object.entries(totals);
   el.innerHTML = entries.length === 0 ? '<span class="muted">No transactions yet.</span>' :
     entries.map(([cur,val]) => `<div class="summary-pill"><span class="summary-cur">${esc(cur)} NET</span><span class="mono summary-val${val<0?' neg':(val>0?' pos':'')}">${fmtMoney(val)}</span></div>`).join('') +
-    '<span class="muted" style="align-self:center;">— expenses in red, income offsets them. See Breakdown for spend-only totals.</span>';
+    '<span class="muted" style="align-self:center;">— expenses in red, income offsets them. See Breakdown for net by category and month.</span>';
 }
 
 function clearTxFilters(){
@@ -976,51 +1027,105 @@ function deleteImportRecord(id){
 /* ======================================================================
    BREAKDOWN
    ====================================================================== */
+/* ---- Breakdown: NET (money in + money out) ----
+   Every figure here is the signed sum of amounts: expenses are negative, income and refunds positive, so a
+   refund offsets the spend it refunds. Sums are kept in whole cents so floating-point dust can never turn a
+   true 0.00 into a tiny red or green number. */
+const toCents = v => Math.round((Number(v) || 0) * 100);
+const signCls = c => c < 0 ? ' neg' : (c > 0 ? ' pos' : '');
+// Bars grow from a zero line. If the values are all one sign, zero sits at the left edge; if they are mixed,
+// zero sits in the middle of the track so money out extends left and money in extends right.
+function bdAxis(vals){
+  const negMax = Math.max(0, ...vals.map(v => -v)), posMax = Math.max(0, ...vals);
+  const mixed = negMax > 0 && posMax > 0;
+  const span = mixed ? negMax + posMax : (Math.max(negMax, posMax) || 1);
+  return { mixed, zero: mixed ? negMax / span * 100 : 0, scale: 100 / span };
+}
+function bdBar(c, ax){
+  if (!c) return '';
+  const w = Math.max(Math.abs(c) * ax.scale, 0.8);
+  const left = (c < 0 && ax.mixed) ? ax.zero - w : ax.zero;
+  return `<div class="breakdown-bar ${c < 0 ? 'bd-out' : 'bd-in'}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%"></div>`;
+}
+function bdRow(label, c, ax, currency, mono){
+  return `
+    <div class="breakdown-row">
+      <span class="breakdown-label${mono ? ' mono' : ''}">${esc(label)}</span>
+      <div class="breakdown-bar-track">${ax.mixed ? `<div class="bd-zero" style="left:${ax.zero.toFixed(2)}%"></div>` : ''}${bdBar(c, ax)}</div>
+      <span class="mono breakdown-val${signCls(c)}">${esc(currency)} ${fmtMoney(c / 100)}</span>
+    </div>`;
+}
 function renderBreakdown(){
   const currencySel = document.getElementById('breakdown-currency');
   const currencies = [...new Set(state.transactions.map(t => t.currency))];
   if (!currencies.includes(currencySel.value)) currencySel.value = currencies[0] || CURRENCIES[0];
   const currency = currencySel.value;
+  const all = state.transactions.filter(t => t.currency === currency);
+  const monthOf = t => String(t.date).slice(0, 7);
+  const months = [...new Set(all.map(monthOf))].sort();                       // oldest -> newest
+  const monthSel = document.getElementById('breakdown-month');
+  const wanted = monthSel.value;
+  monthSel.innerHTML = '<option value="">All months</option>' + months.slice().reverse().map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  monthSel.value = months.includes(wanted) ? wanted : '';
+  const month = monthSel.value;
   const el = document.getElementById('breakdown-content');
-  // Only actual spending (negative amounts) counts toward a spend breakdown —
-  // incoming money (positive) is income, not expenditure, and would distort
-  // both the category and month totals if included.
-  const txs = state.transactions.filter(t => t.currency === currency && Number(t.amount) < 0);
-  if (txs.length === 0){
-    el.innerHTML = `<div class="empty-state">📊<p>No ${esc(currency)} spending yet to break down.</p></div>`;
+  if (all.length === 0){
+    el.innerHTML = `<div class="empty-state">📊<p>No ${esc(currency)} transactions yet to break down.</p></div>`;
     return;
   }
-  const total = txs.reduce((s,t) => s + Math.abs(Number(t.amount)), 0);
 
+  // Totals + by-category, for the chosen month (or everything)
+  const scope = month ? all.filter(t => monthOf(t) === month) : all;
+  let inC = 0, outC = 0;
+  scope.forEach(t => { const c = toCents(t.amount); if (c > 0) inC += c; else outC += c; });
   const byCat = {};
-  txs.forEach(t => { byCat[t.category] = (byCat[t.category]||0) + Math.abs(Number(t.amount)); });
-  const catRows = Object.entries(byCat).sort((a,b) => b[1]-a[1]);
-  const maxCat = Math.max(...catRows.map(r => r[1]), 1);
+  scope.forEach(t => { byCat[t.category] = (byCat[t.category] || 0) + toCents(t.amount); });
+  const catRows = Object.entries(byCat).sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]));   // biggest net spend first
+  const catAxis = bdAxis(catRows.map(r => r[1]));
 
-  const byMonth = {};
-  txs.forEach(t => { const m = t.date.slice(0,7); byMonth[m] = (byMonth[m]||0) + Math.abs(Number(t.amount)); });
-  const monthRows = Object.entries(byMonth).sort((a,b) => b[0] < a[0] ? -1 : 1);
-  const maxMonth = Math.max(...monthRows.map(r => r[1]), 1);
+  // By month (always all months)
+  const monthNet = {};
+  all.forEach(t => { const m = monthOf(t); monthNet[m] = (monthNet[m] || 0) + toCents(t.amount); });
+  const monthRowsDesc = months.slice().reverse().map(m => [m, monthNet[m]]);
+  const monthAxis = bdAxis(monthRowsDesc.map(r => r[1]));
+
+  // Category x month (always all months)
+  const cell = {}, catTotal = {};
+  all.forEach(t => {
+    const c = toCents(t.amount), m = monthOf(t);
+    (cell[t.category] ||= {})[m] = (cell[t.category][m] || 0) + c;
+    catTotal[t.category] = (catTotal[t.category] || 0) + c;
+  });
+  const matrixCats = Object.keys(catTotal).sort((a, b) => catTotal[a] - catTotal[b] || a.localeCompare(b));
+  const maxCell = Math.max(1, ...matrixCats.flatMap(cat => Object.values(cell[cat]).map(Math.abs)));
+  const shade = c => !c ? '' : ` style="background:rgba(${c < 0 ? '181,72,52' : '31,111,92'},${(0.06 + 0.24 * Math.abs(c) / maxCell).toFixed(3)})"`;
+  const grand = months.reduce((n, m) => n + monthNet[m], 0);
 
   el.innerHTML = `
-    <div class="panel-card">
-      <div class="field-label" style="margin-bottom:10px;">By category</div>
-      ${catRows.map(([cat,val]) => `
-        <div class="breakdown-row">
-          <span class="breakdown-label">${esc(cat)}</span>
-          <div class="breakdown-bar-track"><div class="breakdown-bar" style="width:${(val/maxCat*100).toFixed(1)}%"></div></div>
-          <span class="mono breakdown-val">${esc(currency)} ${fmtMoney(val)}</span>
-          <span class="mono breakdown-pct">${(val/total*100).toFixed(1)}%</span>
-        </div>`).join('')}
+    <div class="summary-strip">
+      <div class="summary-pill"><span class="summary-cur">${esc(currency)} IN</span><span class="mono summary-val${inC ? ' pos' : ''}">${fmtMoney(inC / 100)}</span></div>
+      <div class="summary-pill"><span class="summary-cur">OUT</span><span class="mono summary-val${outC ? ' neg' : ''}">${fmtMoney(outC / 100)}</span></div>
+      <div class="summary-pill"><span class="summary-cur">NET</span><span class="mono summary-val${signCls(inC + outC)}">${fmtMoney((inC + outC) / 100)}</span></div>
+      <span class="muted" style="align-self:center;">${month ? esc(month) : 'All months'} · ${scope.length} transaction${scope.length === 1 ? '' : 's'}</span>
     </div>
     <div class="panel-card">
-      <div class="field-label" style="margin-bottom:10px;">By month</div>
-      ${monthRows.map(([month,val]) => `
-        <div class="breakdown-row">
-          <span class="breakdown-label mono">${esc(month)}</span>
-          <div class="breakdown-bar-track"><div class="breakdown-bar breakdown-bar-month" style="width:${(val/maxMonth*100).toFixed(1)}%"></div></div>
-          <span class="mono breakdown-val">${esc(currency)} ${fmtMoney(val)}</span>
-        </div>`).join('')}
+      <div class="field-label" style="margin-bottom:10px;">Net by category — ${month ? esc(month) : 'all months'}</div>
+      ${catRows.map(([cat, c]) => bdRow(cat, c, catAxis, currency, false)).join('')}
+    </div>
+    <div class="panel-card">
+      <div class="field-label" style="margin-bottom:10px;">Net by month</div>
+      ${monthRowsDesc.map(([m, c]) => bdRow(m, c, monthAxis, currency, true)).join('')}
+    </div>
+    <div class="panel-card">
+      <div class="field-label" style="margin-bottom:10px;">Category by month (${esc(currency)}, net)</div>
+      <div class="bd-matrix-wrap"><table class="bd-matrix">
+        <thead><tr><th>Category</th>${months.map(m => `<th>${esc(m)}</th>`).join('')}<th class="bd-total">Total</th></tr></thead>
+        <tbody>${matrixCats.map(cat => `<tr><td>${esc(cat)}</td>${months.map(m => {
+          const c = cell[cat][m];
+          return c === undefined ? '<td class="bd-empty">·</td>' : `<td class="mono${signCls(c)}"${shade(c)}>${fmtMoney(c / 100)}</td>`;
+        }).join('')}<td class="mono bd-total${signCls(catTotal[cat])}">${fmtMoney(catTotal[cat] / 100)}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td>Net</td>${months.map(m => `<td class="mono${signCls(monthNet[m])}">${fmtMoney(monthNet[m] / 100)}</td>`).join('')}<td class="mono bd-total${signCls(grand)}">${fmtMoney(grand / 100)}</td></tr></tfoot>
+      </table></div>
     </div>
   `;
 }
@@ -1211,7 +1316,15 @@ const ACTIONS = Object.assign(Object.create(null), {
   },
   bulkApply: () => applyBulkCategory(),
   bulkClear: () => selectAllShown(false),
-  bulkUndo: () => undoBulkCategory(),
+  bulkUndo: () => undoBulk(),
+  bulkSecondaryInput: (el) => {                          // no re-render while typing (it would drop focus)
+    bulkSecondary = el.value;
+    const btn = document.querySelector('[data-click="bulkSetSecondary"]');
+    if (btn) btn.disabled = !cleanCategoryName(el.value);
+  },
+  bulkSecondaryKey: (el, ev) => { if (ev.key === 'Enter'){ ev.preventDefault(); bulkSecondary = el.value; applyBulkSecondary(false); } },
+  bulkSetSecondary: () => applyBulkSecondary(false),
+  bulkClearSecondary: () => applyBulkSecondary(true),
   deleteTx: (el) => deleteTx(el.dataset.id),
   renderTxList: () => renderTxList(),
   clearTxFilters: () => clearTxFilters(),
@@ -1273,7 +1386,7 @@ const ACTIONS = Object.assign(Object.create(null), {
 });
 (function wireEvents(){
   // DOM event -> the data-attribute that opts an element in
-  const events = { click: 'click', change: 'change', input: 'input', focusout: 'blur', submit: 'submit',
+  const events = { click: 'click', change: 'change', input: 'input', keydown: 'keydown', focusout: 'blur', submit: 'submit',
                    dragover: 'dragover', dragleave: 'dragleave', drop: 'drop' };
   Object.keys(events).forEach(type => {
     const attr = 'data-' + events[type];
